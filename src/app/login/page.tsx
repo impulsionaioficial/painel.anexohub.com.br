@@ -2,36 +2,39 @@
 
 import { useState } from 'react';
 import { Sparkles, Key, Mail, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
-import { getStoredUsers, setActiveUser } from '@/lib/auth-store';
+import { setActiveUser } from '@/lib/auth-store';
 
 export default function LoginPage() {
   const [email, setEmail] = useState<string>('admin@allwhatspy.com');
-  const [password, setPassword] = useState<string>('admin123');
+  const [password, setPassword] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setLoading(true);
 
     try {
-      const users = getStoredUsers();
-      const userMatch = users.find(
-        (u) => u.email.toLowerCase() === email.trim().toLowerCase()
-      );
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
 
-      if (!userMatch) {
-        setErrorMsg('E-mail ou senha incorretos.');
+      const data = await res.json();
+
+      if (!data.success) {
+        setErrorMsg(data.error || 'E-mail ou senha incorretos.');
         setLoading(false);
         return;
       }
 
-      // Successful Auth
-      setActiveUser(userMatch);
+      // Successful Auth on Server
+      setActiveUser(data.user);
       window.location.href = '/disparador';
     } catch {
-      setErrorMsg('Erro ao autenticar. Tente novamente.');
+      setErrorMsg('Erro de conexão ao autenticar no servidor.');
       setLoading(false);
     }
   };
@@ -58,7 +61,7 @@ export default function LoginPage() {
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <Lock className="w-4 h-4 text-indigo-400" /> Acesso ao Painel
             </h2>
-            <p className="text-xs text-slate-400 font-medium">Digite suas credenciais abaixo para continuar.</p>
+            <p className="text-xs text-slate-400 font-medium">Digite suas credenciais salvas no banco PostgreSQL.</p>
           </div>
 
           {errorMsg && (
@@ -76,6 +79,7 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@allwhatspy.com"
                 className="w-full p-3 rounded-2xl bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-indigo-500 font-medium shadow-sm"
                 required
               />
@@ -89,6 +93,7 @@ export default function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
                 className="w-full p-3 rounded-2xl bg-slate-950 border border-slate-800 text-slate-100 text-xs focus:outline-none focus:border-indigo-500 font-medium shadow-sm"
                 required
               />
@@ -100,11 +105,11 @@ export default function LoginPage() {
             disabled={loading}
             className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-all shadow-lg shadow-indigo-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {loading ? 'Autenticando...' : 'Entrar no Sistema'} <ArrowRight className="w-4 h-4" />
+            {loading ? 'Autenticando no Servidor...' : 'Entrar no Sistema'} <ArrowRight className="w-4 h-4" />
           </button>
 
           <div className="pt-2 text-center text-[11px] text-slate-500 flex items-center justify-center gap-1 font-medium">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Ambiente Seguro com Controle de Acesso (RBAC)
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Autenticação Server-Side Segura no PostgreSQL (Prisma)
           </div>
         </form>
       </div>
