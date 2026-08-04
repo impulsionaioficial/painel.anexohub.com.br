@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database Container
+  postgres:
+    image: postgres:15-alpine
+    container_name: allwhatspy-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: allwhatspy
+      POSTGRES_PASSWORD: allwhatspy_secret_pass
+      POSTGRES_DB: allwhatspy_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - traefik-net
+
+  # Next.js Web App Container
+  allwhatspy-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: allwhatspy-web:latest
+    container_name: allwhatspy-web
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DATABASE_URL=postgresql://allwhatspy:allwhatspy_secret_pass@postgres:5432/allwhatspy_db?schema=public
+    networks:
+      - traefik-net
+    labels:
+      - "traefik.enable=true"
+      # Substitua painel.seu-dominio.com.br pelo seu subdomínio real
+      - "traefik.http.routers.allwhatspy.rule=Host(`painel.seu-dominio.com.br`)"
+      - "traefik.http.routers.allwhatspy.entrypoints=websecure"
+      - "traefik.http.routers.allwhatspy.tls.certresolver=letsencrypt"
+      - "traefik.http.services.allwhatspy.loadbalancer.server.port=3000"
+
+volumes:
+  postgres_data:
+
+networks:
+  traefik-net:
+    external: true
