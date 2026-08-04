@@ -1,11 +1,22 @@
 import { NextResponse } from 'next/server';
 
+function normalizeState(val: any): string {
+  if (!val) return 'close';
+  const str = String(val).toLowerCase();
+  if (str.includes('open') || str.includes('connected') || str.includes('online') || str.includes('200')) {
+    return 'open';
+  }
+  if (str.includes('connecting')) {
+    return 'connecting';
+  }
+  return 'close';
+}
+
 export async function POST(request: Request) {
   try {
     const { baseUrl, apiKey, instanceName } = await request.json();
 
     if (!baseUrl || !apiKey || !instanceName || baseUrl.includes('exemplo.com')) {
-      // Demo mode fallback when VPS is not connected
       return NextResponse.json({
         success: true,
         isDemo: true,
@@ -36,11 +47,23 @@ export async function POST(request: Request) {
     }
 
     const data = await res.json();
+    const rawState =
+      data.instance?.state ||
+      data.instance?.status ||
+      data.instance?.connectionStatus ||
+      data.connectionState?.state ||
+      data.state ||
+      data.status ||
+      'close';
+
+    const normalized = normalizeState(rawState);
+
     return NextResponse.json({
       success: true,
       instance: {
         instanceName: data.instance?.instanceName || instanceName,
-        state: data.instance?.state || 'close',
+        state: normalized,
+        rawState,
       },
     });
   } catch (error: any) {

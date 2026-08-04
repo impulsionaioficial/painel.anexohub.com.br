@@ -2,94 +2,119 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { Wifi, WifiOff, RefreshCw, Server } from 'lucide-react';
-import { getStoredConfig } from '@/lib/evolution-store';
+import { RefreshCw, Sun, Moon, Menu, Sparkles, User, LogOut } from 'lucide-react';
+import { getActiveUser, setActiveUser } from '@/lib/auth-store';
+import { UserAccount } from '@/lib/auth-types';
 
-export default function Header() {
-  const [status, setStatus] = useState<'open' | 'connecting' | 'close' | 'loading'>('loading');
-  const [isDemo, setIsDemo] = useState<boolean>(false);
-  const [instanceName, setInstanceName] = useState<string>('');
+interface HeaderProps {
+  onToggleMobileMenu?: () => void;
+}
 
-  const checkConnection = async () => {
-    setStatus('loading');
-    const config = getStoredConfig();
-    setInstanceName(config.instanceName);
+export default function Header({ onToggleMobileMenu }: HeaderProps) {
+  const [isDarkTheme, setIsDarkTheme] = useState<boolean>(true);
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+
+  useEffect(() => {
+    setCurrentUser(getActiveUser());
 
     try {
-      const res = await fetch('/api/evolution/status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      });
-      const data = await res.json();
-      if (data.isDemo) setIsDemo(true);
-      if (data.success && data.instance?.state) {
-        setStatus(data.instance.state);
+      const savedTheme = localStorage.getItem('awp_theme_mode');
+      if (savedTheme === 'light') {
+        setIsDarkTheme(false);
+        document.documentElement.classList.remove('dark');
       } else {
-        setStatus('close');
+        setIsDarkTheme(true);
+        document.documentElement.classList.add('dark');
       }
     } catch {
-      setStatus('close');
+      // Default dark
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const nextDark = !isDarkTheme;
+    setIsDarkTheme(nextDark);
+    if (nextDark) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('awp_theme_mode', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('awp_theme_mode', 'light');
     }
   };
 
-  useEffect(() => {
-    checkConnection();
-  }, []);
+  const handleLogout = () => {
+    if (confirm('Deseja encerrar sua sessão?')) {
+      setActiveUser(null);
+      window.location.href = '/login';
+    }
+  };
 
   return (
-    <header className="h-16 bg-slate-900/60 border-b border-slate-800/80 px-6 flex items-center justify-between backdrop-blur-md sticky top-0 z-40 select-none">
+    <header className="h-16 bg-white/80 dark:bg-slate-900/80 border-b border-slate-200 dark:border-slate-800/80 px-4 md:px-6 flex items-center justify-between backdrop-blur-md sticky top-0 z-40 select-none transition-colors">
+      {/* Mobile Menu Button & Brand Header */}
       <div className="flex items-center gap-3">
-        <h2 className="text-sm font-medium text-slate-300">
-          Instância: <span className="font-semibold text-slate-100">{instanceName || 'allwhatspy'}</span>
-        </h2>
-        {isDemo && (
-          <span className="text-[11px] px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
-            Modo Demonstrativo
-          </span>
+        {onToggleMobileMenu && (
+          <button
+            onClick={onToggleMobileMenu}
+            className="md:hidden p-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+            title="Abrir menu de navegação"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
         )}
+
+        <div className="md:hidden flex items-center gap-2">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center text-white shadow-sm">
+            <Sparkles className="w-4 h-4" />
+          </div>
+          <span className="font-extrabold text-slate-900 dark:text-slate-100 text-xs tracking-tight">
+            AllWhatsPy <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-mono">PRO</span>
+          </span>
+        </div>
       </div>
 
-      <div className="flex items-center gap-4">
-        {/* Status Badge */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-950/80 border border-slate-800 text-xs">
-          {status === 'loading' ? (
-            <>
-              <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />
-              <span className="text-slate-400">Verificando...</span>
-            </>
-          ) : status === 'open' ? (
-            <>
-              <span className="relative flex h-2.5 w-2.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-              </span>
-              <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="text-emerald-400 font-medium">Conectado ao WhatsApp</span>
-            </>
-          ) : (
-            <>
-              <span className="h-2.5 w-2.5 rounded-full bg-rose-500"></span>
-              <WifiOff className="w-3.5 h-3.5 text-rose-400" />
-              <span className="text-rose-400 font-medium">Desconectado</span>
-            </>
-          )}
-        </div>
+      {/* Right User & Tools Bar */}
+      <div className="flex items-center gap-3">
+        {/* User Badge */}
+        {currentUser && (
+          <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs shadow-sm">
+            <div className="w-6 h-6 rounded-full bg-indigo-600 text-white font-extrabold text-[10px] flex items-center justify-center">
+              {currentUser.name.substring(0, 1).toUpperCase()}
+            </div>
+            <span className="font-bold text-slate-800 dark:text-slate-200 hidden sm:inline">{currentUser.name}</span>
+            <span className="text-[9px] px-2 py-0.5 rounded-full font-bold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+              {currentUser.role === 'admin' ? 'ADMIN' : 'OPERADOR'}
+            </span>
+          </div>
+        )}
 
+        {/* Refresh Page State */}
         <button
-          onClick={checkConnection}
-          className="p-2 text-slate-400 hover:text-slate-200 bg-slate-800/40 hover:bg-slate-800 rounded-lg transition-colors"
-          title="Atualizar status"
+          onClick={() => window.location.reload()}
+          className="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"
+          title="Atualizar página"
         >
           <RefreshCw className="w-4 h-4" />
         </button>
 
-        <Link
-          href="/configuracoes"
-          className="flex items-center gap-1.5 text-xs text-slate-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 px-3 py-1.5 rounded-lg transition-colors font-medium"
+        {/* Theme Toggle Button (Light/Dark) */}
+        <button
+          onClick={toggleTheme}
+          className="p-2 text-slate-600 dark:text-amber-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors flex items-center justify-center"
+          title={isDarkTheme ? 'Alternar para Modo Claro ☀️' : 'Alternar para Modo Escuro 🌙'}
         >
-          <Server className="w-3.5 h-3.5 text-emerald-400" /> VPS Config
-        </Link>
+          {isDarkTheme ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
+        </button>
+
+        {/* Logout Button */}
+        <button
+          onClick={handleLogout}
+          className="p-2 text-slate-500 hover:text-rose-600 dark:text-slate-400 dark:hover:text-rose-400 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"
+          title="Sair da conta"
+        >
+          <LogOut className="w-4 h-4" />
+        </button>
       </div>
     </header>
   );
