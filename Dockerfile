@@ -2,13 +2,14 @@
 FROM node:20-alpine AS base
 
 # Install libc6-compat for alpine compatibility if needed
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat openssl
 
 FROM base AS deps
 WORKDIR /app
 
-# Copy lock files and install dependencies
+# Copy lock files and prisma schema for postinstall prisma generate
 COPY package.json package-lock.json ./
+COPY prisma ./prisma/
 RUN npm ci
 
 # 2. Stage Builder
