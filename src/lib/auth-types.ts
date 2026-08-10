@@ -7,6 +7,7 @@ export type PermissionKey =
   | 'module_email_disparador'
   | 'module_email_config'
   | 'module_users_admin'
+  | 'module_integrations'
   | 'can_start_campaign'
   | 'can_delete_instance'
   | 'can_manage_smtp'
@@ -55,6 +56,12 @@ export const ALL_PERMISSIONS: UserPermissionDefinition[] = [
     label: 'Gestão de Usuários',
     category: 'módulo',
     description: 'Acesso ao painel administrativo de criação e permissões de usuários.',
+  },
+  {
+    key: 'module_integrations',
+    label: 'APIs & Webhooks',
+    category: 'módulo',
+    description: 'Acesso ao gerenciador de chaves de API, webhooks e documentação de integração com CRM.',
   },
   {
     key: 'can_start_campaign',

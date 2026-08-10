@@ -1,5 +1,7 @@
 import { ContactItem, ErrorCategoryType, DetailedReportItem } from './types';
 import { parseSpintax } from './evolution-store';
+import { dispatchWebhookEvent } from './webhook-dispatcher';
+
 
 export interface BackgroundCampaign {
   id: string;
@@ -148,6 +150,14 @@ async function runCampaignLoop(campaignId: string) {
         contact.status = 'sent';
         contact.sentAt = new Date().toLocaleTimeString('pt-BR');
 
+        dispatchWebhookEvent('whatsapp.message.sent', {
+          campaignId,
+          phone: contact.phone,
+          message: personalizedMsg,
+          instanceName: currentInstance,
+          sentAt: sentTimeString,
+        });
+
         campaign.logs.unshift({
           timestamp: new Date().toLocaleTimeString('pt-BR'),
           phone: contact.phone,
@@ -207,6 +217,14 @@ async function runCampaignLoop(campaignId: string) {
           contact.status = 'sent';
           contact.sentAt = new Date().toLocaleTimeString('pt-BR');
 
+          dispatchWebhookEvent('whatsapp.message.sent', {
+            campaignId,
+            phone: contact.phone,
+            message: personalizedMsg,
+            instanceName: currentInstance,
+            sentAt: sentTimeString,
+          });
+
           campaign.logs.unshift({
             timestamp: new Date().toLocaleTimeString('pt-BR'),
             phone: contact.phone,
@@ -228,6 +246,16 @@ async function runCampaignLoop(campaignId: string) {
           const parsedErr = categorizeError(errText, res.status);
           contact.status = 'error';
           contact.errorMessage = parsedErr.title;
+
+          dispatchWebhookEvent('whatsapp.message.error', {
+            campaignId,
+            phone: contact.phone,
+            errorTitle: parsedErr.title,
+            errorCategory: parsedErr.category,
+            errorMessage: errText,
+            instanceName: currentInstance,
+            failedAt: sentTimeString,
+          });
 
           campaign.logs.unshift({
             timestamp: new Date().toLocaleTimeString('pt-BR'),

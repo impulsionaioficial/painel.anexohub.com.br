@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Send, Mail, Settings, Server, ScrollText, Sparkles, ShieldCheck, X, Users } from 'lucide-react';
+import { Send, Mail, Settings, Server, ScrollText, Sparkles, ShieldCheck, X, Users, Webhook as WebhookIcon, Key } from 'lucide-react';
 import { getActiveUser, hasPermission } from '@/lib/auth-store';
 import { UserAccount } from '@/lib/auth-types';
 
@@ -32,6 +32,7 @@ export default function Sidebar({ isMobileOpen = false, onCloseMobile }: Sidebar
   const showEmailDisparador = hasPermission(currentUser, 'module_email_disparador');
   const showEmailConfig = hasPermission(currentUser, 'module_email_config');
   const showUsersAdmin = hasPermission(currentUser, 'module_users_admin');
+  const showIntegrations = hasPermission(currentUser, 'module_integrations');
 
   const navContent = (
     <div className="flex flex-col justify-between h-full p-5 select-none">
@@ -148,6 +149,27 @@ export default function Sidebar({ isMobileOpen = false, onCloseMobile }: Sidebar
                   <Server className="w-4 h-4" /> Servidores SMTP
                 </Link>
               )}
+            </div>
+          )}
+
+          {/* Integrations Module */}
+          {showIntegrations && (
+            <div className="space-y-1.5">
+              <p className="px-3 text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">
+                Desenvolvedor / CRM
+              </p>
+
+              <Link
+                href="/integracoes"
+                onClick={handleNavClick}
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs font-bold transition-all ${
+                  pathname === '/integracoes'
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/25'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                }`}
+              >
+                <WebhookIcon className="w-4 h-4" /> APIs & Webhooks
+              </Link>
             </div>
           )}
 

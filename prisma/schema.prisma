@@ -25,3 +25,38 @@ model Session {
   expiresAt DateTime
   createdAt DateTime @default(now())
 }
+
+model ApiKey {
+  id         String    @id @default(uuid())
+  name       String
+  key        String    @unique
+  userId     String?
+  status     String    @default("active") // "active" | "revoked"
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+}
+
+model Webhook {
+  id        String       @id @default(uuid())
+  name      String
+  url       String
+  events    String[]     @default([])
+  secret    String
+  userId    String?
+  status    String       @default("active") // "active" | "inactive"
+  createdAt DateTime     @default(now())
+  logs      WebhookLog[]
+}
+
+model WebhookLog {
+  id           String   @id @default(uuid())
+  webhookId    String
+  webhook      Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event        String
+  payload      String
+  statusCode   Int?
+  responseBody String?
+  status       String   // "success" | "failed"
+  createdAt    DateTime @default(now())
+}
+
