@@ -23,8 +23,6 @@ export async function POST(request: Request) {
               { phone: '5521996543210', name: 'Marcos Vinicius', jid: '5521996543210@s.whatsapp.net', admin: null },
               { phone: '5531988112233', name: 'Ana Paula Rocha', jid: '5531988112233@s.whatsapp.net', admin: null },
               { phone: '5541991234567', name: 'Fernanda Lima', jid: '5541991234567@s.whatsapp.net', admin: null },
-              { phone: '5511982223344', name: 'Rodrigo Alves', jid: '5511982223344@s.whatsapp.net', admin: null },
-              { phone: '5519971112233', name: 'Camila Martins', jid: '5519971112233@s.whatsapp.net', admin: null },
             ],
           },
           {
@@ -38,22 +36,6 @@ export async function POST(request: Request) {
               { phone: '5511998887777', name: 'Carlos Eduardo (Admin)', jid: '5511998887777@s.whatsapp.net', admin: 'superadmin' },
               { phone: '5581987654321', name: 'Lucas Mendes', jid: '5581987654321@s.whatsapp.net', admin: null },
               { phone: '5571999887766', name: 'Beatriz Santos', jid: '5571999887766@s.whatsapp.net', admin: null },
-              { phone: '5561981119900', name: 'Gabriel Souza', jid: '5561981119900@s.whatsapp.net', admin: null },
-              { phone: '5585994445566', name: 'Mariana Oliveira', jid: '5585994445566@s.whatsapp.net', admin: null },
-            ],
-          },
-          {
-            id: '120363033333333333@g.us',
-            subject: '📈 Networking Marketing Digital 2026',
-            description: 'Grupo aberto de gestores de tráfego, afiliados e infoprodutores.',
-            creation: 1700000000,
-            size: 120,
-            owner: '5511988776655@s.whatsapp.net',
-            participants: [
-              { phone: '5511988776655', name: 'Felipe Ribeiro (Admin)', jid: '5511988776655@s.whatsapp.net', admin: 'admin' },
-              { phone: '5548991112244', name: 'Thiago Ferreira', jid: '5548991112244@s.whatsapp.net', admin: null },
-              { phone: '5551984443322', name: 'Vanessa Dias', jid: '5551984443322@s.whatsapp.net', admin: null },
-              { phone: '5562993332211', name: 'Diego Barbosa', jid: '5562993332211@s.whatsapp.net', admin: null },
             ],
           },
         ],
@@ -62,7 +44,31 @@ export async function POST(request: Request) {
 
     const cleanBaseUrl = baseUrl.replace(/\/$/, '');
 
-    // Try fetchAllGroups with participants
+    // 1. Fetch contacts to build a LID-to-Phone map
+    const lidToPhoneMap = new Map<string, string>();
+    try {
+      const contactsRes = await fetch(`${cleanBaseUrl}/chat/findContacts/${instanceName}`, {
+        method: 'POST',
+        headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+        cache: 'no-store',
+      });
+      if (contactsRes.ok) {
+        const contactsData = await contactsRes.json();
+        const rawContacts = Array.isArray(contactsData) ? contactsData : contactsData.contacts || contactsData.records || [];
+        rawContacts.forEach((c: any) => {
+          let cJid = c.remoteJid || c.jid || c.id || '';
+          let cPhone = cJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          let cLid = (c.lid || '').split('@')[0].replace(/\D/g, '');
+
+          if (cLid && cPhone && cPhone.length >= 10 && cPhone.length <= 13) {
+            lidToPhoneMap.set(cLid, cPhone);
+          }
+        });
+      }
+    } catch {}
+
+    // 2. Fetch groups
     let res = await fetch(`${cleanBaseUrl}/group/fetchAllGroups/${instanceName}?getParticipants=true`, {
       method: 'GET',
       headers: {
@@ -73,7 +79,6 @@ export async function POST(request: Request) {
     });
 
     if (!res.ok) {
-      // Fallback: try POST method
       res = await fetch(`${cleanBaseUrl}/group/fetchAllGroups/${instanceName}?getParticipants=true`, {
         method: 'POST',
         headers: {
@@ -86,7 +91,6 @@ export async function POST(request: Request) {
     }
 
     if (!res.ok) {
-      // Fallback 2: try findGroups
       res = await fetch(`${cleanBaseUrl}/group/findGroups/${instanceName}`, {
         method: 'GET',
         headers: {
@@ -122,11 +126,11 @@ export async function POST(request: Request) {
       const participants = rawParticipants
         .map((p: any) => {
           let pJid = '';
+          let phoneCandidate = '';
 
           if (typeof p === 'string') {
             pJid = p;
           } else if (p && typeof p === 'object') {
-            // Prioritize actual phone number fields over LID (Encrypted Device ID)
             const phoneField = p.phoneNumber || p.phone || p.user;
             const jidField = p.jid || p.id;
 
@@ -139,10 +143,20 @@ export async function POST(request: Request) {
             }
           }
 
-          // Clean phone number: remove @..., device suffixes like :12, and non-digits
-          const rawPhone = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          let rawPhone = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+
+          // Check if rawPhone is a 14-16 digit LID ID, and resolve from lidToPhoneMap
+          let isLid = false;
+          if (rawPhone.length > 13 || (rawPhone.length >= 14 && !rawPhone.startsWith('55'))) {
+            isLid = true;
+            if (lidToPhoneMap.has(rawPhone)) {
+              rawPhone = lidToPhoneMap.get(rawPhone)!;
+              isLid = false;
+            }
+          }
+
           const rawName = typeof p === 'object' ? p.name || p.pushName || p.verifiedName || '' : '';
-          const name = String(rawName).trim() || (rawPhone ? `+${rawPhone}` : 'Participante');
+          const name = String(rawName).trim() || (isLid ? 'Membro da Comunidade (Oculto)' : (rawPhone ? `+${rawPhone}` : 'Participante'));
           const admin = typeof p === 'object' && (p.admin || p.isAdmin) ? 'admin' : null;
 
           return {
@@ -150,9 +164,9 @@ export async function POST(request: Request) {
             phone: rawPhone,
             name,
             admin,
+            isLid,
           };
         })
-        // Filter out items without valid phone numbers or purely invalid LIDs if empty
         .filter((p: any) => p.phone && p.phone.length >= 8);
 
       return {

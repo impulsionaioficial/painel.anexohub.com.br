@@ -32,6 +32,7 @@ interface Participant {
   phone: string;
   name: string;
   admin?: 'admin' | 'superadmin' | null;
+  isLid?: boolean;
 }
 
 interface Group {
@@ -1166,28 +1167,40 @@ export default function ExtratorPage() {
                     p.name.toLowerCase().includes(memberSearch.toLowerCase()) ||
                     p.phone.includes(memberSearch.replace(/\D/g, ''))
                 )
-                .map((participant) => (
-                  <div key={participant.jid} className="pt-2 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2">
-                      <div>
-                        <p className="font-bold text-slate-900 dark:text-slate-100">{participant.name}</p>
-                        <p className="font-mono text-[11px] text-slate-400">+{formatPhoneNumber(participant.phone)}</p>
+                .map((participant) => {
+                  const isLidEncrypted = participant.isLid || participant.phone.length > 13;
+
+                  return (
+                    <div key={participant.jid} className="pt-2 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <div>
+                          <p className="font-bold text-slate-900 dark:text-slate-100">{participant.name}</p>
+                          {isLidEncrypted ? (
+                            <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-md inline-block">
+                              🔒 Oculto p/ WhatsApp (Comunidade)
+                            </span>
+                          ) : (
+                            <p className="font-mono text-[11px] text-slate-400">+{formatPhoneNumber(participant.phone)}</p>
+                          )}
+                        </div>
+                        {participant.admin && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-[10px] flex items-center gap-1">
+                            <Crown className="w-3 h-3" /> Admin
+                          </span>
+                        )}
                       </div>
-                      {participant.admin && (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-[10px] flex items-center gap-1">
-                          <Crown className="w-3 h-3" /> Admin
-                        </span>
+
+                      {!isLidEncrypted && (
+                        <button
+                          onClick={() => handleSendToDisparador([participant])}
+                          className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-all flex items-center gap-1"
+                        >
+                          <Send className="w-3 h-3" /> Disparar
+                        </button>
                       )}
                     </div>
-
-                    <button
-                      onClick={() => handleSendToDisparador([participant])}
-                      className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-all flex items-center gap-1"
-                    >
-                      <Send className="w-3 h-3" /> Disparar
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           </div>
         </div>
