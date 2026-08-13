@@ -5,7 +5,7 @@ import Papa from 'papaparse';
 import { Send, Upload, Plus, Trash2, Play, Pause, Sparkles, Clock, FileText, Info, Calendar, BarChart3, Paperclip, X, Image as ImageIcon, FileCheck, Layers, StopCircle, RefreshCw, MessageSquare } from 'lucide-react';
 import { ContactItem, LogEntry, DetailedReportItem } from '@/lib/types';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
-import { addStoredReportItem } from '@/lib/schedule-store';
+import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
 import ReportTable from '@/components/ReportTable';
 import ScheduleManager from '@/components/ScheduleManager';
 import ChatViewer from '@/components/ChatViewer';
@@ -125,10 +125,8 @@ export default function DisparadorPage() {
           );
         }
 
-        if (camp.reports && Array.isArray(camp.reports)) {
-          camp.reports.forEach((rep: DetailedReportItem) => {
-            addStoredReportItem(rep);
-          });
+        if (camp.reports && Array.isArray(camp.reports) && camp.reports.length > 0) {
+          addStoredReportItems(camp.reports);
         }
       }
     } catch {

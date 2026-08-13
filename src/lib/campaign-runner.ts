@@ -55,6 +55,16 @@ export function getCampaignById(id: string): BackgroundCampaign | null {
   return globalCampaignsMap.get(id) || null;
 }
 
+export function getAllServerCampaignReports(): DetailedReportItem[] {
+  const allReports: DetailedReportItem[] = [];
+  globalCampaignsMap.forEach((camp) => {
+    if (camp.reports && Array.isArray(camp.reports)) {
+      allReports.push(...camp.reports);
+    }
+  });
+  return allReports;
+}
+
 export function controlCampaign(id: string, action: 'pause' | 'resume' | 'stop'): boolean {
   const campaign = globalCampaignsMap.get(id);
   if (!campaign) return false;
