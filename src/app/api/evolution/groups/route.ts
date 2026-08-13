@@ -1,5 +1,19 @@
 import { NextResponse } from 'next/server';
 
+// Helper function to restore Brazilian 9th digit if lost during Evolution API LID mapping (PR #2688 fix)
+function formatBrazilianPhone(phone: string): string {
+  const clean = phone.replace(/\D/g, '');
+  // Brazilian mobile number with 12 digits: 55 + 2-digit DDD + 8-digit number
+  if (clean.length === 12 && clean.startsWith('55')) {
+    const ddd = parseInt(clean.substring(2, 4), 10);
+    const body = clean.substring(4);
+    if (ddd >= 11 && ddd <= 99 && ['6', '7', '8', '9'].includes(body[0])) {
+      return `55${ddd}9${body}`;
+    }
+  }
+  return clean;
+}
+
 export async function POST(request: Request) {
   try {
     const { baseUrl, apiKey, instanceName } = await request.json();
@@ -45,7 +59,7 @@ export async function POST(request: Request) {
         const rawContacts = Array.isArray(contactsData) ? contactsData : contactsData.contacts || contactsData.records || [];
         rawContacts.forEach((c: any) => {
           let cJid = c.remoteJid || c.jid || c.id || '';
-          let cPhone = cJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          let cPhone = formatBrazilianPhone(cJid.split('@')[0].split(':')[0].replace(/\D/g, ''));
           let cLid = (c.lid || '').split('@')[0].replace(/\D/g, '');
 
           if (cLid && cPhone && cPhone.length >= 10 && cPhone.length <= 13) {
@@ -99,17 +113,6 @@ export async function POST(request: Request) {
     const data = await res.json();
     const rawList = Array.isArray(data) ? data : data.groups || data.records || [];
 
-    // Debug logging in server stdout/docker logs
-    console.log(`[EVOLUTION_v2_DEBUG] Found ${rawList.length} raw groups from Evolution API v2.4.0`);
-    if (rawList.length > 0) {
-      console.log(`[EVOLUTION_v2_DEBUG] Sample group 0:`, JSON.stringify({
-        id: rawList[0].id || rawList[0].jid,
-        subject: rawList[0].subject,
-        participantsCount: rawList[0].participants?.length || 0,
-        sampleParticipant: rawList[0].participants?.[0],
-      }));
-    }
-
     const groups = await Promise.all(
       rawList.map(async (item: any) => {
         const id = item.id || item.jid || item.groupJid || '';
@@ -130,7 +133,6 @@ export async function POST(request: Request) {
 
         if (id && (rawParticipants.length === 0 || hasLids)) {
           try {
-            // Attempt 1: Evolution v2.4.0 GET /group/participants/{instanceName}?groupJid={id}
             let partRes = await fetch(`${cleanBaseUrl}/group/participants/${instanceName}?groupJid=${encodeURIComponent(id)}`, {
               method: 'GET',
               headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
@@ -138,7 +140,6 @@ export async function POST(request: Request) {
             });
 
             if (!partRes.ok) {
-              // Attempt 2: GET /group/findGroupInfos/{instanceName}?groupJid={id}
               partRes = await fetch(`${cleanBaseUrl}/group/findGroupInfos/${instanceName}?groupJid=${encodeURIComponent(id)}`, {
                 method: 'GET',
                 headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
@@ -166,7 +167,6 @@ export async function POST(request: Request) {
             if (typeof p === 'string') {
               pJid = p;
             } else if (p && typeof p === 'object') {
-              // Extract all possible phone fields from Evolution API v2
               const phoneField = p.phoneNumber || p.phone || p.user || p.number;
               const jidField = p.jid || p.id;
 
@@ -179,13 +179,13 @@ export async function POST(request: Request) {
               }
             }
 
-            let rawPhone = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+            let rawPhone = formatBrazilianPhone(pJid.split('@')[0].split(':')[0].replace(/\D/g, ''));
 
             let isLid = false;
             if (rawPhone.length > 13 || (rawPhone.length >= 14 && !rawPhone.startsWith('55'))) {
               isLid = true;
               if (lidToPhoneMap.has(rawPhone)) {
-                rawPhone = lidToPhoneMap.get(rawPhone)!;
+                rawPhone = formatBrazilianPhone(lidToPhoneMap.get(rawPhone)!);
                 isLid = false;
               }
             }
