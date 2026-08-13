@@ -25,6 +25,7 @@ import {
   CheckSquare,
   Square,
   Sparkles,
+  ChevronDown,
 } from 'lucide-react';
 import { DetailedReportItem, ErrorCategoryType } from '@/lib/types';
 import {
@@ -75,12 +76,27 @@ export default function ReportTable() {
 
   // Filters State
   const [filterStatus, setFilterStatus] = useState<'all' | 'success' | 'error' | 'pending'>('all');
-  const [filterInstance, setFilterInstance] = useState<string>('all');
+  const [selectedFilterInstances, setSelectedFilterInstances] = useState<string[]>([]);
+  const [instanceDropdownOpen, setInstanceDropdownOpen] = useState<boolean>(false);
+  const [instanceSearch, setInstanceSearch] = useState<string>('');
+  const instanceDropdownRef = useRef<HTMLDivElement>(null);
+
   const [filterPeriod, setFilterPeriod] = useState<PeriodFilterType>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (instanceDropdownRef.current && !instanceDropdownRef.current.contains(event.target as Node)) {
+        setInstanceDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Selected Row Checkboxes
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -295,6 +311,32 @@ export default function ReportTable() {
     showToast('📋 Copiado para a área de transferência!');
   };
 
+  // Calculate dispatch count per instance for dropdown badges
+  const instanceCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    reports.forEach((r) => {
+      const inst = r.instanceName || 'Padrão';
+      map[inst] = (map[inst] || 0) + 1;
+    });
+    return map;
+  }, [reports]);
+
+  // Toggle single instance filter
+  const toggleInstanceFilter = (instName: string) => {
+    setSelectedFilterInstances((prev) =>
+      prev.includes(instName) ? prev.filter((i) => i !== instName) : [...prev, instName]
+    );
+  };
+
+  // Select / Deselect All instances filter
+  const handleSelectAllInstances = () => {
+    if (selectedFilterInstances.length === allAvailableInstances.length) {
+      setSelectedFilterInstances([]);
+    } else {
+      setSelectedFilterInstances([...allAvailableInstances]);
+    }
+  };
+
   // Filter Reports based on ALL criteria
   const filteredReports = useMemo(() => {
     const now = new Date();
@@ -329,8 +371,11 @@ export default function ReportTable() {
       // 1. Status Filter
       if (filterStatus !== 'all' && item.status !== filterStatus) return false;
 
-      // 2. Instance Filter
-      if (filterInstance !== 'all' && item.instanceName !== filterInstance) return false;
+      // 2. Multi-Instance Filter (if selected instances > 0, match any of selected)
+      if (selectedFilterInstances.length > 0) {
+        const itemInst = item.instanceName || 'Padrão';
+        if (!selectedFilterInstances.includes(itemInst)) return false;
+      }
 
       // 3. Category Filter
       if (filterCategory !== 'all') {
@@ -367,7 +412,7 @@ export default function ReportTable() {
 
       return true;
     });
-  }, [reports, filterStatus, filterInstance, filterPeriod, filterCategory, searchQuery, startDate, endDate]);
+  }, [reports, filterStatus, selectedFilterInstances, filterPeriod, filterCategory, searchQuery, startDate, endDate]);
 
   // Toggle selection for all filtered rows
   const handleToggleSelectAll = () => {
@@ -670,21 +715,110 @@ export default function ReportTable() {
             </div>
           </div>
 
-          {/* Instance Filter */}
-          <div className="space-y-1">
-            <label className="text-slate-500 dark:text-slate-400 font-bold text-[11px]">Filtrar por Instância:</label>
-            <select
-              value={filterInstance}
-              onChange={(e) => setFilterInstance(e.target.value)}
-              className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-200 text-xs font-bold focus:outline-none focus:border-indigo-500 shadow-sm"
+          {/* Multi-Select Instance Filter */}
+          <div className="space-y-1 relative" ref={instanceDropdownRef}>
+            <label className="text-slate-500 dark:text-slate-400 font-bold text-[11px] flex items-center justify-between">
+              <span>Filtrar por Instância:</span>
+              {selectedFilterInstances.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedFilterInstances([])}
+                  className="text-[10px] text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
+                >
+                  Limpar ({selectedFilterInstances.length})
+                </button>
+              )}
+            </label>
+
+            <button
+              type="button"
+              onClick={() => setInstanceDropdownOpen((prev) => !prev)}
+              className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-200 text-xs font-bold focus:outline-none focus:border-indigo-500 shadow-sm flex items-center justify-between gap-1.5"
             >
-              <option value="all">Todas as Instâncias ({allAvailableInstances.length})</option>
-              {allAvailableInstances.map((inst) => (
-                <option key={inst} value={inst}>
-                  📱 {inst}
-                </option>
-              ))}
-            </select>
+              <div className="flex items-center gap-1.5 truncate">
+                <Layers className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                <span className="truncate">
+                  {selectedFilterInstances.length === 0
+                    ? `Todas as Instâncias (${allAvailableInstances.length})`
+                    : selectedFilterInstances.length === 1
+                    ? `📱 ${selectedFilterInstances[0]}`
+                    : `${selectedFilterInstances.length} Instâncias Selecionadas`}
+                </span>
+              </div>
+              <ChevronDown
+                className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform ${
+                  instanceDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {/* Dropdown Menu */}
+            {instanceDropdownOpen && (
+              <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl p-2.5 space-y-1.5 min-w-[250px] max-h-72 overflow-y-auto animate-in fade-in">
+                {/* Search input if > 4 instances */}
+                {allAvailableInstances.length > 4 && (
+                  <div className="relative pb-1">
+                    <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-2" />
+                    <input
+                      type="text"
+                      placeholder="Buscar instância..."
+                      value={instanceSearch}
+                      onChange={(e) => setInstanceSearch(e.target.value)}
+                      className="w-full pl-7 pr-2 py-1 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-200 text-[11px] focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                )}
+
+                {/* Select / Deselect All Action */}
+                <button
+                  type="button"
+                  onClick={handleSelectAllInstances}
+                  className="w-full p-2 rounded-xl text-left text-xs font-extrabold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 transition-colors flex items-center justify-between"
+                >
+                  <span>
+                    {selectedFilterInstances.length === allAvailableInstances.length
+                      ? '✕ Desmarcar Todas'
+                      : '✓ Selecionar Todas as Instâncias'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">({allAvailableInstances.length})</span>
+                </button>
+
+                <div className="border-t border-slate-100 dark:border-slate-800/80 my-1" />
+
+                {/* Instance List */}
+                <div className="space-y-0.5 max-h-48 overflow-y-auto pr-0.5">
+                  {allAvailableInstances
+                    .filter((inst) => inst.toLowerCase().includes(instanceSearch.toLowerCase()))
+                    .map((inst) => {
+                      const isChecked = selectedFilterInstances.includes(inst);
+                      const count = instanceCounts[inst] || 0;
+                      return (
+                        <label
+                          key={inst}
+                          className={`cursor-pointer p-2 rounded-xl text-xs font-bold transition-all flex items-center justify-between gap-2 select-none ${
+                            isChecked
+                              ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-900 dark:text-indigo-300'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleInstanceFilter(inst)}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-0 cursor-pointer"
+                            />
+                            <span className="truncate font-mono">📱 {inst}</span>
+                          </div>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold shrink-0">
+                            {count}
+                          </span>
+                        </label>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Status Filter */}
@@ -720,6 +854,35 @@ export default function ReportTable() {
             </select>
           </div>
         </div>
+
+        {/* Selected Instance Chips/Pills (if any) */}
+        {selectedFilterInstances.length > 0 && (
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800/60 flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] text-slate-500 font-bold">Instâncias Filtradas:</span>
+            {selectedFilterInstances.map((inst) => (
+              <span
+                key={inst}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-500/30"
+              >
+                <span>📱 {inst}</span>
+                <button
+                  type="button"
+                  onClick={() => toggleInstanceFilter(inst)}
+                  className="hover:text-rose-500 p-0.5"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
+            <button
+              type="button"
+              onClick={() => setSelectedFilterInstances([])}
+              className="text-[10px] text-rose-500 hover:underline font-bold ml-1"
+            >
+              Limpar todas
+            </button>
+          </div>
+        )}
 
         {/* Custom Date Range Row (if selected) */}
         {filterPeriod === 'custom' && (
@@ -814,14 +977,14 @@ export default function ReportTable() {
 
           {/* Reset Filters */}
           {(filterStatus !== 'all' ||
-            filterInstance !== 'all' ||
+            selectedFilterInstances.length > 0 ||
             filterPeriod !== 'all' ||
             filterCategory !== 'all' ||
             searchQuery.trim() !== '') && (
             <button
               onClick={() => {
                 setFilterStatus('all');
-                setFilterInstance('all');
+                setSelectedFilterInstances([]);
                 setFilterPeriod('all');
                 setFilterCategory('all');
                 setSearchQuery('');
