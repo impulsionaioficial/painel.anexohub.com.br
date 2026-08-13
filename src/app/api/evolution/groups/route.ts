@@ -25,19 +25,6 @@ export async function POST(request: Request) {
               { phone: '5541991234567', name: 'Fernanda Lima', jid: '5541991234567@s.whatsapp.net', admin: null },
             ],
           },
-          {
-            id: '120363022222222222@g.us',
-            subject: '💬 Comunidade AllWhatsPy PRO',
-            description: 'Troca de experiências sobre campanhas e estratégias de mensagens.',
-            creation: 1695000000,
-            size: 45,
-            owner: '5511998887777@s.whatsapp.net',
-            participants: [
-              { phone: '5511998887777', name: 'Carlos Eduardo (Admin)', jid: '5511998887777@s.whatsapp.net', admin: 'superadmin' },
-              { phone: '5581987654321', name: 'Lucas Mendes', jid: '5581987654321@s.whatsapp.net', admin: null },
-              { phone: '5571999887766', name: 'Beatriz Santos', jid: '5571999887766@s.whatsapp.net', admin: null },
-            ],
-          },
         ],
       });
     }
@@ -68,7 +55,7 @@ export async function POST(request: Request) {
       }
     } catch {}
 
-    // 2. Fetch groups
+    // 2. Fetch all groups
     let res = await fetch(`${cleanBaseUrl}/group/fetchAllGroups/${instanceName}?getParticipants=true`, {
       method: 'GET',
       headers: {
@@ -112,125 +99,122 @@ export async function POST(request: Request) {
     const data = await res.json();
     const rawList = Array.isArray(data) ? data : data.groups || data.records || [];
 
-    const groups = rawList.map((item: any) => {
-      const id = item.id || item.jid || item.groupJid || '';
-      const subject = item.subject || item.name || item.groupName || 'Grupo sem nome';
-      const description = item.description || item.desc || '';
-      const creation = item.creation || item.creationTime;
-      const owner = item.owner || item.groupOwner || '';
+    // Debug logging in server stdout/docker logs
+    console.log(`[EVOLUTION_v2_DEBUG] Found ${rawList.length} raw groups from Evolution API v2.4.0`);
+    if (rawList.length > 0) {
+      console.log(`[EVOLUTION_v2_DEBUG] Sample group 0:`, JSON.stringify({
+        id: rawList[0].id || rawList[0].jid,
+        subject: rawList[0].subject,
+        participantsCount: rawList[0].participants?.length || 0,
+        sampleParticipant: rawList[0].participants?.[0],
+      }));
+    }
 
-      const rawParticipants = Array.isArray(item.participants)
-        ? item.participants
-        : item.members || item.groupParticipants || [];
+    const groups = await Promise.all(
+      rawList.map(async (item: any) => {
+        const id = item.id || item.jid || item.groupJid || '';
+        const subject = item.subject || item.name || item.groupName || 'Grupo sem nome';
+        const description = item.description || item.desc || '';
+        const creation = item.creation || item.creationTime;
+        const owner = item.owner || item.groupOwner || '';
 
-      const participants = rawParticipants
-        .map((p: any) => {
-          let pJid = '';
+        let rawParticipants = Array.isArray(item.participants)
+          ? item.participants
+          : item.members || item.groupParticipants || [];
 
-          if (typeof p === 'string') {
-            pJid = p;
-          } else if (p && typeof p === 'object') {
-            const phoneField = p.phoneNumber || p.phone || p.user;
-            const jidField = p.jid || p.id;
+        // If participants is empty or contains mostly LIDs, try calling Evolution v2.4.0 participant endpoints
+        const hasLids = rawParticipants.some((p: any) => {
+          const str = typeof p === 'string' ? p : p.id || p.jid || p.phoneNumber || '';
+          return str.includes('@lid') || str.replace(/\D/g, '').length > 13;
+        });
 
-            if (phoneField && !String(phoneField).includes('@lid')) {
-              pJid = String(phoneField);
-            } else if (jidField && !String(jidField).includes('@lid')) {
-              pJid = String(jidField);
-            } else {
-              pJid = String(phoneField || jidField || '');
-            }
-          }
-
-          let rawPhone = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
-
-          // Check if rawPhone is a 14-16 digit LID ID, and resolve from lidToPhoneMap
-          let isLid = false;
-          if (rawPhone.length > 13 || (rawPhone.length >= 14 && !rawPhone.startsWith('55'))) {
-            isLid = true;
-            if (lidToPhoneMap.has(rawPhone)) {
-              rawPhone = lidToPhoneMap.get(rawPhone)!;
-              isLid = false;
-            }
-          }
-
-          const rawName = typeof p === 'object' ? p.name || p.pushName || p.verifiedName || '' : '';
-          const name = String(rawName).trim() || (isLid ? 'Membro da Comunidade (Oculto)' : (rawPhone ? `+${rawPhone}` : 'Participante'));
-          const admin = typeof p === 'object' && (p.admin || p.isAdmin) ? 'admin' : null;
-
-          return {
-            jid: pJid || `${rawPhone}@s.whatsapp.net`,
-            phone: rawPhone,
-            name,
-            admin,
-            isLid,
-          };
-        })
-        .filter((p: any) => p.phone && p.phone.length >= 8);
-
-      return {
-        id,
-        subject,
-        description,
-        creation,
-        owner,
-        size: participants.length || item.size || item.participantsCount || 0,
-        participants,
-      };
-    });
-
-    // 3. AUTOMATIC RESOLUTION: Collect unresolved LIDs and query fetchProfile server-side
-    const unresolvedLids = new Set<string>();
-    groups.forEach((g: any) => {
-      g.participants.forEach((p: any) => {
-        if (p.isLid || p.phone.length > 13) {
-          unresolvedLids.add(p.phone);
-        }
-      });
-    });
-
-    if (unresolvedLids.size > 0) {
-      const lidsArray = Array.from(unresolvedLids).slice(0, 100);
-      await Promise.all(
-        lidsArray.map(async (lid: string) => {
+        if (id && (rawParticipants.length === 0 || hasLids)) {
           try {
-            const targetLid = lid.includes('@') ? lid : `${lid}@lid`;
-            const profileRes = await fetch(`${cleanBaseUrl}/chat/fetchProfile/${instanceName}`, {
-              method: 'POST',
+            // Attempt 1: Evolution v2.4.0 GET /group/participants/{instanceName}?groupJid={id}
+            let partRes = await fetch(`${cleanBaseUrl}/group/participants/${instanceName}?groupJid=${encodeURIComponent(id)}`, {
+              method: 'GET',
               headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
-              body: JSON.stringify({ number: targetLid }),
               cache: 'no-store',
             });
 
-            if (profileRes.ok) {
-              const profileData = await profileRes.json();
-              const rawWuid = profileData.wuid || profileData.jid || profileData.number || profileData.id || '';
-              const realPhone = String(rawWuid).split('@')[0].split(':')[0].replace(/\D/g, '');
+            if (!partRes.ok) {
+              // Attempt 2: GET /group/findGroupInfos/{instanceName}?groupJid={id}
+              partRes = await fetch(`${cleanBaseUrl}/group/findGroupInfos/${instanceName}?groupJid=${encodeURIComponent(id)}`, {
+                method: 'GET',
+                headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
+                cache: 'no-store',
+              });
+            }
 
-              if (realPhone && realPhone.length >= 10 && realPhone.length <= 13) {
-                lidToPhoneMap.set(lid, realPhone);
+            if (partRes.ok) {
+              const partData = await partRes.json();
+              const fetchedList = Array.isArray(partData)
+                ? partData
+                : partData.participants || partData.members || partData.group?.participants || [];
+
+              if (fetchedList.length > 0) {
+                rawParticipants = fetchedList;
               }
             }
           } catch {}
-        })
-      );
+        }
 
-      // Re-apply resolution map to all group participants automatically
-      groups.forEach((g: any) => {
-        g.participants = g.participants.map((p: any) => {
-          if ((p.isLid || p.phone.length > 13) && lidToPhoneMap.has(p.phone)) {
-            const realPhone = lidToPhoneMap.get(p.phone)!;
+        const participants = rawParticipants
+          .map((p: any) => {
+            let pJid = '';
+
+            if (typeof p === 'string') {
+              pJid = p;
+            } else if (p && typeof p === 'object') {
+              // Extract all possible phone fields from Evolution API v2
+              const phoneField = p.phoneNumber || p.phone || p.user || p.number;
+              const jidField = p.jid || p.id;
+
+              if (phoneField && !String(phoneField).includes('@lid')) {
+                pJid = String(phoneField);
+              } else if (jidField && !String(jidField).includes('@lid')) {
+                pJid = String(jidField);
+              } else {
+                pJid = String(phoneField || jidField || '');
+              }
+            }
+
+            let rawPhone = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+
+            let isLid = false;
+            if (rawPhone.length > 13 || (rawPhone.length >= 14 && !rawPhone.startsWith('55'))) {
+              isLid = true;
+              if (lidToPhoneMap.has(rawPhone)) {
+                rawPhone = lidToPhoneMap.get(rawPhone)!;
+                isLid = false;
+              }
+            }
+
+            const rawName = typeof p === 'object' ? p.name || p.pushName || p.verifiedName || '' : '';
+            const name = String(rawName).trim() || (isLid ? 'Membro da Comunidade' : (rawPhone ? `+${rawPhone}` : 'Participante'));
+            const admin = typeof p === 'object' && (p.admin || p.isAdmin) ? 'admin' : null;
+
             return {
-              ...p,
-              phone: realPhone,
-              name: p.name && !p.name.includes('Membro') ? p.name : `+${realPhone}`,
-              isLid: false,
+              jid: pJid || `${rawPhone}@s.whatsapp.net`,
+              phone: rawPhone,
+              name,
+              admin,
+              isLid,
             };
-          }
-          return p;
-        });
-      });
-    }
+          })
+          .filter((p: any) => p.phone && p.phone.length >= 8);
+
+        return {
+          id,
+          subject,
+          description,
+          creation,
+          owner,
+          size: participants.length || item.size || item.participantsCount || 0,
+          participants,
+        };
+      })
+    );
 
     return NextResponse.json({
       success: true,
