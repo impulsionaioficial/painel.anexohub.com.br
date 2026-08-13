@@ -119,20 +119,41 @@ export async function POST(request: Request) {
         ? item.participants
         : item.members || item.groupParticipants || [];
 
-      const participants = rawParticipants.map((p: any) => {
-        let pJid = typeof p === 'string' ? p : p.id || p.jid || p.user || '';
-        const phone = pJid.split('@')[0];
-        const rawName = p.name || p.pushName || p.verifiedName || '';
-        const name = String(rawName).trim() || (phone ? `+${phone}` : 'Participante');
-        const admin = p.admin || p.isAdmin ? 'admin' : null;
+      const participants = rawParticipants
+        .map((p: any) => {
+          let pJid = '';
 
-        return {
-          jid: pJid,
-          phone,
-          name,
-          admin,
-        };
-      });
+          if (typeof p === 'string') {
+            pJid = p;
+          } else if (p && typeof p === 'object') {
+            // Prioritize actual phone number fields over LID (Encrypted Device ID)
+            const phoneField = p.phoneNumber || p.phone || p.user;
+            const jidField = p.jid || p.id;
+
+            if (phoneField && !String(phoneField).includes('@lid')) {
+              pJid = String(phoneField);
+            } else if (jidField && !String(jidField).includes('@lid')) {
+              pJid = String(jidField);
+            } else {
+              pJid = String(phoneField || jidField || '');
+            }
+          }
+
+          // Clean phone number: remove @..., device suffixes like :12, and non-digits
+          const rawPhone = pJid.split('@')[0].split(':')[0].replace(/\D/g, '');
+          const rawName = typeof p === 'object' ? p.name || p.pushName || p.verifiedName || '' : '';
+          const name = String(rawName).trim() || (rawPhone ? `+${rawPhone}` : 'Participante');
+          const admin = typeof p === 'object' && (p.admin || p.isAdmin) ? 'admin' : null;
+
+          return {
+            jid: pJid || `${rawPhone}@s.whatsapp.net`,
+            phone: rawPhone,
+            name,
+            admin,
+          };
+        })
+        // Filter out items without valid phone numbers or purely invalid LIDs if empty
+        .filter((p: any) => p.phone && p.phone.length >= 8);
 
       return {
         id,
