@@ -30,6 +30,14 @@ services:
     networks:
       - default
       - Impulsinet
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=Impulsinet"
+        - "traefik.http.routers.allwhatspy.rule=Host(`painel.anexohub.com.br`)"
+        - "traefik.http.routers.allwhatspy.entrypoints=websecure"
+        - "traefik.http.routers.allwhatspy.tls.certresolver=letsencrypt"
+        - "traefik.http.services.allwhatspy.loadbalancer.server.port=3000"
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=Impulsinet"
