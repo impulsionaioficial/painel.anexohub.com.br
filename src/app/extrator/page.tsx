@@ -285,6 +285,101 @@ export default function ExtratorPage() {
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
   };
 
+  const [resolvingLids, setResolvingLids] = useState<boolean>(false);
+
+  // Resolve hidden LIDs to real phone numbers via Evolution API
+  const handleResolveLids = async (targetGroupObj?: Group) => {
+    const groupsToProcess = targetGroupObj ? [targetGroupObj] : groups.filter((g) => selectedGroupIds.includes(g.id));
+    const lidsToResolve: string[] = [];
+
+    groupsToProcess.forEach((g) => {
+      g.participants.forEach((p) => {
+        if (p.isLid || p.phone.length > 13) {
+          lidsToResolve.push(p.phone);
+        }
+      });
+    });
+
+    if (lidsToResolve.length === 0) {
+      showToast('ℹ️ Todos os contatos desta lista já possuem números de telefone reais!');
+      return;
+    }
+
+    setResolvingLids(true);
+    showToast(`🔍 Consultando Evolution API para revelar ${lidsToResolve.length} números...`);
+
+    try {
+      const res = await fetch('/api/evolution/resolve-lids', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          instanceName: selectedInstance || config.instanceName,
+          lids: lidsToResolve,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success && data.resolved) {
+        const map: Record<string, { phone: string; name?: string }> = data.resolved;
+        let countResolved = 0;
+
+        // Update groups state in memory
+        setGroups((prevGroups) =>
+          prevGroups.map((g) => {
+            const updatedParticipants = g.participants.map((p) => {
+              if (map[p.phone]) {
+                countResolved++;
+                const item = map[p.phone];
+                return {
+                  ...p,
+                  phone: item.phone,
+                  name: p.name && !p.name.includes('Membro') ? p.name : item.name || `+${item.phone}`,
+                  isLid: false,
+                };
+              }
+              return p;
+            });
+            return { ...g, participants: updatedParticipants };
+          })
+        );
+
+        // Also update selectedGroup if modal is open
+        if (selectedGroup) {
+          setSelectedGroup((prev) => {
+            if (!prev) return null;
+            const updatedParticipants = prev.participants.map((p) => {
+              if (map[p.phone]) {
+                const item = map[p.phone];
+                return {
+                  ...p,
+                  phone: item.phone,
+                  name: p.name && !p.name.includes('Membro') ? p.name : item.name || `+${item.phone}`,
+                  isLid: false,
+                };
+              }
+              return p;
+            });
+            return { ...prev, participants: updatedParticipants };
+          });
+        }
+
+        if (countResolved > 0) {
+          showToast(`🎉 ${countResolved} números de telefone recuperados com sucesso!`);
+        } else {
+          showToast('ℹ️ O WhatsApp ainda não disponibilizou o telefone no perfil desses LIDs.');
+        }
+      } else {
+        showToast('⚠️ Erro ao consultar a Evolution API para resolver números.');
+      }
+    } catch (err: any) {
+      showToast('⚠️ Falha de comunicação com o servidor ao resolver números.');
+    } finally {
+      setResolvingLids(false);
+    }
+  };
+
   // Create New Instance
   const handleCreateInstance = async () => {
     if (!inputNewInstanceName.trim()) {
@@ -735,6 +830,15 @@ export default function ExtratorPage() {
               {/* Format Extraction Buttons */}
               <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
                 <button
+                  onClick={() => handleResolveLids()}
+                  disabled={resolvingLids}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 border border-amber-200 dark:border-amber-500/20 transition-all disabled:opacity-50"
+                >
+                  <Search className={`w-3.5 h-3.5 ${resolvingLids ? 'animate-spin' : ''}`} />
+                  <span>{resolvingLids ? 'Buscando...' : 'Revelar Números (LID)'}</span>
+                </button>
+
+                <button
                   onClick={exportCsv}
                   className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-500/20 transition-all"
                 >
@@ -1151,6 +1255,15 @@ export default function ExtratorPage() {
               </div>
 
               <div className="flex items-center gap-2 w-full md:w-auto">
+                <button
+                  onClick={() => handleResolveLids(selectedGroup)}
+                  disabled={resolvingLids}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 border border-amber-200 dark:border-amber-500/20 transition-all disabled:opacity-50"
+                >
+                  <Search className={`w-3.5 h-3.5 ${resolvingLids ? 'animate-spin' : ''}`} />
+                  <span>{resolvingLids ? 'Buscando...' : 'Revelar Números (LID)'}</span>
+                </button>
+
                 <button
                   onClick={() => handleSendToDisparador(selectedGroup.participants)}
                   className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-all shadow-sm"
