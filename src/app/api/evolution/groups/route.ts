@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 // Helper function to restore Brazilian 9th digit if lost during Evolution API LID mapping (PR #2688 fix)
 function formatBrazilianPhone(phone: string): string {
   const clean = phone.replace(/\D/g, '');
-  // Brazilian mobile number with 12 digits: 55 + 2-digit DDD + 8-digit number
   if (clean.length === 12 && clean.startsWith('55')) {
     const ddd = parseInt(clean.substring(2, 4), 10);
     const body = clean.substring(4);
@@ -191,18 +190,18 @@ export async function POST(request: Request) {
             }
 
             const rawName = typeof p === 'object' ? p.name || p.pushName || p.verifiedName || '' : '';
-            const name = String(rawName).trim() || (isLid ? 'Membro da Comunidade' : (rawPhone ? `+${rawPhone}` : 'Participante'));
+            const name = String(rawName).trim() || (isLid ? `Membro (ID: ${rawPhone})` : (rawPhone ? `+${rawPhone}` : 'Participante'));
             const admin = typeof p === 'object' && (p.admin || p.isAdmin) ? 'admin' : null;
 
             return {
-              jid: pJid || `${rawPhone}@s.whatsapp.net`,
+              jid: pJid.includes('@') ? pJid : (isLid ? `${rawPhone}@lid` : `${rawPhone}@s.whatsapp.net`),
               phone: rawPhone,
               name,
               admin,
               isLid,
             };
           })
-          .filter((p: any) => p.phone && p.phone.length >= 8);
+          .filter((p: any) => p.phone && p.phone.length >= 5);
 
         return {
           id,
@@ -215,6 +214,86 @@ export async function POST(request: Request) {
         };
       })
     );
+
+    // 3. Batch resolution for remaining LIDs using whatsappNumbers & fetchProfile
+    const unresolvedLids = new Set<string>();
+    groups.forEach((g: any) => {
+      g.participants.forEach((p: any) => {
+        if (p.isLid || p.phone.length > 13) {
+          unresolvedLids.add(p.phone);
+        }
+      });
+    });
+
+    if (unresolvedLids.size > 0) {
+      const lidsList = Array.from(unresolvedLids).slice(0, 100);
+
+      // Attempt A: Batch call /chat/whatsappNumbers
+      try {
+        const wnRes = await fetch(`${cleanBaseUrl}/chat/whatsappNumbers/${instanceName}`, {
+          method: 'POST',
+          headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ numbers: lidsList.map((l) => (l.includes('@') ? l : `${l}@lid`)) }),
+          cache: 'no-store',
+        });
+        if (wnRes.ok) {
+          const wnData = await wnRes.json();
+          const items = Array.isArray(wnData) ? wnData : wnData.results || wnData.numbers || [];
+          items.forEach((item: any) => {
+            const rawJid = item.jid || item.wuid || item.number || '';
+            const phone = formatBrazilianPhone(String(rawJid).split('@')[0].split(':')[0].replace(/\D/g, ''));
+            const origLid = String(item.number || item.jid || '').split('@')[0].replace(/\D/g, '');
+
+            if (phone && phone.length >= 10 && phone.length <= 13 && origLid) {
+              lidToPhoneMap.set(origLid, phone);
+            }
+          });
+        }
+      } catch {}
+
+      // Attempt B: /chat/fetchProfile for remaining LIDs
+      const stillUnresolved = lidsList.filter((l) => !lidToPhoneMap.has(l)).slice(0, 50);
+      await Promise.all(
+        stillUnresolved.map(async (lid: string) => {
+          try {
+            const targetLid = lid.includes('@') ? lid : `${lid}@lid`;
+            const profileRes = await fetch(`${cleanBaseUrl}/chat/fetchProfile/${instanceName}`, {
+              method: 'POST',
+              headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ number: targetLid }),
+              cache: 'no-store',
+            });
+
+            if (profileRes.ok) {
+              const profileData = await profileRes.json();
+              const rawWuid = profileData.wuid || profileData.jid || profileData.number || profileData.id || '';
+              const realPhone = formatBrazilianPhone(String(rawWuid).split('@')[0].split(':')[0].replace(/\D/g, ''));
+
+              if (realPhone && realPhone.length >= 10 && realPhone.length <= 13) {
+                lidToPhoneMap.set(lid, realPhone);
+              }
+            }
+          } catch {}
+        })
+      );
+
+      // Re-apply resolved map to all group participants
+      groups.forEach((g: any) => {
+        g.participants = g.participants.map((p: any) => {
+          if ((p.isLid || p.phone.length > 13) && lidToPhoneMap.has(p.phone)) {
+            const realPhone = lidToPhoneMap.get(p.phone)!;
+            return {
+              ...p,
+              phone: realPhone,
+              jid: `${realPhone}@s.whatsapp.net`,
+              name: p.name && !p.name.includes('Membro') ? p.name : `+${realPhone}`,
+              isLid: false,
+            };
+          }
+          return p;
+        });
+      });
+    }
 
     return NextResponse.json({
       success: true,
