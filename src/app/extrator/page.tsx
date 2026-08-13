@@ -19,9 +19,11 @@ import {
   Sparkles,
   Check,
   Server,
-  Key,
+  FileSpreadsheet,
+  FileText,
+  CheckSquare,
+  Square,
   Layers,
-  ChevronDown,
 } from 'lucide-react';
 import { getStoredConfig, saveStoredConfig, formatPhoneNumber } from '@/lib/evolution-store';
 
@@ -79,6 +81,9 @@ export default function ExtratorPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
 
+  // Selected Group Checkboxes
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+
   // Search & Filter
   const [groupSearch, setGroupSearch] = useState<string>('');
   const [contactSearch, setContactSearch] = useState<string>('');
@@ -109,7 +114,6 @@ export default function ExtratorPage() {
     setTimeout(() => setToastMsg(null), 3500);
   };
 
-  // Poll connection status while QR Modal is open
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initial load
@@ -167,7 +171,11 @@ export default function ExtratorPage() {
       const dataGroups = await resGroups.json();
 
       if (dataGroups.success) {
-        setGroups(dataGroups.groups || []);
+        const loadedGroups: Group[] = dataGroups.groups || [];
+        setGroups(loadedGroups);
+        // Select all by default
+        setSelectedGroupIds(loadedGroups.map((g) => g.id));
+
         if (dataGroups.isDemo) {
           setIsDemo(true);
           setConnectionState('close');
@@ -232,8 +240,6 @@ export default function ExtratorPage() {
       if (data.success && data.qrcode) {
         setQrBase64(data.qrcode.base64);
         setPairingCode(data.qrcode.pairingCode);
-
-        // Start polling status
         startStatusPolling();
       } else {
         setErrorMsg(data.error || 'Não foi possível gerar o QR Code.');
@@ -318,7 +324,7 @@ export default function ExtratorPage() {
     }
   };
 
-  // Save VPS Config (BaseUrl and ApiKey)
+  // Save VPS Config
   const handleSaveConfig = () => {
     if (!inputBaseUrl.trim() || !inputApiKey.trim()) {
       alert('Preencha a URL da VPS e a API Key.');
@@ -340,28 +346,162 @@ export default function ExtratorPage() {
     loadAllData(newConfig);
   };
 
-  // Export CSV Helper
-  const exportCsv = (filename: string, rows: { name: string; phone: string; origin?: string }[]) => {
+  // Filtered Groups & Contacts
+  const filteredGroups = groups.filter(
+    (g: Group) =>
+      g.subject.toLowerCase().includes(groupSearch.toLowerCase()) ||
+      (g.description && g.description.toLowerCase().includes(groupSearch.toLowerCase()))
+  );
+
+  const filteredContacts = contacts.filter(
+    (c: Contact) =>
+      c.name.toLowerCase().includes(contactSearch.toLowerCase()) ||
+      c.phone.includes(contactSearch.replace(/\D/g, ''))
+  );
+
+  // Toggle single group checkbox selection
+  const toggleGroupSelect = (id: string) => {
+    setSelectedGroupIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  // Toggle select all groups
+  const toggleSelectAllGroups = () => {
+    if (selectedGroupIds.length === filteredGroups.length) {
+      setSelectedGroupIds([]);
+    } else {
+      setSelectedGroupIds(filteredGroups.map((g: Group) => g.id));
+    }
+  };
+
+  // Build rows containing EXACTLY the 4 required output fields:
+  // 1. Nome no WhatsApp (se tiver)
+  // 2. Número do WhatsApp
+  // 3. Qual grupo era
+  // 4. Data de extração
+  const getSelectedExportRows = () => {
+    const extractionDateStr = new Date().toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    const rows: { name: string; phone: string; groupName: string; extractionDate: string }[] = [];
+    const targetGroups = groups.filter((g) => selectedGroupIds.includes(g.id));
+
+    targetGroups.forEach((group) => {
+      group.participants.forEach((p) => {
+        const cleanPhone = formatPhoneNumber(p.phone);
+        const nameVal = p.name && !p.name.startsWith('+') ? p.name.trim() : '';
+
+        rows.push({
+          name: nameVal,
+          phone: cleanPhone,
+          groupName: group.subject || 'Sem Nome',
+          extractionDate: extractionDateStr,
+        });
+      });
+    });
+
+    return rows;
+  };
+
+  // EXPORT EXCEL (.csv format styled for Excel with text phone formatting)
+  const exportExcel = () => {
+    const rows = getSelectedExportRows();
     if (rows.length === 0) {
-      showToast('⚠️ Nenhum contato para exportar!');
+      showToast('⚠️ Selecione pelo menos 1 grupo para extrair!');
       return;
     }
-    const header = ['Nome', 'Telefone', 'Origem'];
+
+    const header = ['Nome no WhatsApp', 'Número do WhatsApp', 'Qual Grupo Era', 'Data de Extração'];
     const csvLines = [
       header.join(';'),
-      ...rows.map((r) => `"${(r.name || '').replace(/"/g, '""')}";"${formatPhoneNumber(r.phone)}";"${(r.origin || '').replace(/"/g, '""')}"`),
+      ...rows.map((r) =>
+        [
+          `"${(r.name || '').replace(/"/g, '""')}"`,
+          `"'${r.phone}"`, // Format phone as text in Excel with leading single quote
+          `"${(r.groupName || '').replace(/"/g, '""')}"`,
+          `"${r.extractionDate}"`,
+        ].join(';')
+      ),
     ];
-    const csvContent = '\uFEFF' + csvLines.join('\n');
 
+    const csvContent = '\uFEFF' + csvLines.join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `${filename}_${Date.now()}.csv`);
+    link.setAttribute('download', `extracao_grupos_excel_${Date.now()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    showToast(`✅ ${rows.length} contatos baixados em CSV!`);
+    showToast(`✅ ${rows.length} contatos exportados para Excel!`);
+  };
+
+  // EXPORT CSV (Standard UTF-8 BOM)
+  const exportCsv = () => {
+    const rows = getSelectedExportRows();
+    if (rows.length === 0) {
+      showToast('⚠️ Selecione pelo menos 1 grupo para extrair!');
+      return;
+    }
+
+    const header = ['Nome no WhatsApp', 'Número do WhatsApp', 'Qual Grupo Era', 'Data de Extração'];
+    const csvLines = [
+      header.join(';'),
+      ...rows.map((r) =>
+        [
+          `"${(r.name || '').replace(/"/g, '""')}"`,
+          `"${r.phone}"`,
+          `"${(r.groupName || '').replace(/"/g, '""')}"`,
+          `"${r.extractionDate}"`,
+        ].join(';')
+      ),
+    ];
+
+    const csvContent = '\uFEFF' + csvLines.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `extracao_grupos_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`✅ ${rows.length} contatos exportados em CSV!`);
+  };
+
+  // EXPORT TXT (Text file layout)
+  const exportTxt = () => {
+    const rows = getSelectedExportRows();
+    if (rows.length === 0) {
+      showToast('⚠️ Selecione pelo menos 1 grupo para extrair!');
+      return;
+    }
+
+    const txtLines = [
+      `NOME NO WHATSAPP | NÚMERO DO WHATSAPP | QUAL GRUPO ERA | DATA DE EXTRAÇÃO`,
+      `---------------------------------------------------------------------------------`,
+      ...rows.map(
+        (r) =>
+          `${r.name || 'N/A'} | ${r.phone} | ${r.groupName} | ${r.extractionDate}`
+      ),
+    ];
+
+    const txtContent = txtLines.join('\n');
+    const blob = new Blob([txtContent], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `extracao_grupos_${Date.now()}.txt`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast(`📄 ${rows.length} contatos exportados em TXT!`);
   };
 
   // Send to Disparador Helper
@@ -385,36 +525,7 @@ export default function ExtratorPage() {
     }, 800);
   };
 
-  // Get all unique group members
-  const getAllUniqueGroupMembers = () => {
-    const map = new Map<string, { name: string; phone: string; origin: string }>();
-    groups.forEach((g) => {
-      g.participants.forEach((p) => {
-        if (p.phone && !map.has(p.phone)) {
-          map.set(p.phone, {
-            name: p.name,
-            phone: p.phone,
-            origin: `Grupo: ${g.subject}`,
-          });
-        }
-      });
-    });
-    return Array.from(map.values());
-  };
-
-  const totalUniqueGroupMembers = getAllUniqueGroupMembers().length;
-
-  const filteredGroups = groups.filter(
-    (g) =>
-      g.subject.toLowerCase().includes(groupSearch.toLowerCase()) ||
-      (g.description && g.description.toLowerCase().includes(groupSearch.toLowerCase()))
-  );
-
-  const filteredContacts = contacts.filter(
-    (c) =>
-      c.name.toLowerCase().includes(contactSearch.toLowerCase()) ||
-      c.phone.includes(contactSearch.replace(/\D/g, ''))
-  );
+  const selectedRowsCount = getSelectedExportRows().length;
 
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-8 select-none">
@@ -438,7 +549,7 @@ export default function ExtratorPage() {
             </h1>
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 font-medium">
-            Extraia contatos da agenda, grupos e membros de grupos do número conectado via Evolution API.
+            Selecione grupos e extraia nomes, números, nome do grupo e data nos formatos CSV, Excel ou TXT.
           </p>
         </div>
 
@@ -462,7 +573,7 @@ export default function ExtratorPage() {
         </div>
       </div>
 
-      {/* Demo Warning Banner if VPS not configured */}
+      {/* Demo Warning Banner */}
       {isDemo && (
         <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/20 text-amber-900 dark:text-amber-200 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -485,9 +596,7 @@ export default function ExtratorPage() {
 
       {/* Connection & Instance Bar */}
       <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
-        {/* Connection Info & Selector */}
         <div className="flex flex-wrap items-center gap-4 w-full md:w-auto">
-          {/* Status Indicator */}
           <div className="flex items-center gap-2">
             <div
               className={`w-3 h-3 rounded-full shrink-0 ${
@@ -514,7 +623,6 @@ export default function ExtratorPage() {
 
           <div className="h-8 w-px bg-slate-200 dark:bg-slate-800 hidden md:block" />
 
-          {/* Instance Selector Dropdown */}
           <div className="flex flex-col">
             <span className="text-[10px] uppercase tracking-wider font-extrabold text-slate-400 block">
               Instância Ativa
@@ -538,7 +646,6 @@ export default function ExtratorPage() {
                 </span>
               )}
 
-              {/* Add New Instance Button */}
               <button
                 onClick={() => setShowNewInstanceModal(true)}
                 title="Criar nova instância no WhatsApp"
@@ -550,22 +657,13 @@ export default function ExtratorPage() {
           </div>
         </div>
 
-        {/* Connection Action Buttons */}
         <div className="flex items-center gap-2 w-full md:w-auto">
           <button
             onClick={handleOpenQrModal}
-            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition-all shadow-sm"
+            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 hover:bg-emerald-100 shadow-sm transition-all"
           >
             <QrCode className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             <span>Escanear QR Code</span>
-          </button>
-
-          <button
-            onClick={() => exportCsv('todos_membros_grupos', getAllUniqueGroupMembers())}
-            className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 transition-all"
-          >
-            <Download className="w-4 h-4" />
-            <span>Exportar Grupos ({totalUniqueGroupMembers})</span>
           </button>
         </div>
       </div>
@@ -604,22 +702,85 @@ export default function ExtratorPage() {
         </button>
       </div>
 
-      {/* TAB 1: GRUPOS */}
+      {/* TAB 1: GRUPOS COM SELEÇÃO E EXPORTAÇÃO EXCEL, CSV E TXT */}
       {activeTab === 'groups' && (
         <div className="space-y-6">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="relative w-full md:w-96">
+          {/* Top Control Bar: Search & Export Formats */}
+          <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+              {/* Select All Checkbox & Counter */}
+              <div className="flex items-center gap-3 w-full md:w-auto">
+                <button
+                  onClick={toggleSelectAllGroups}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-bold hover:bg-slate-200 transition-all"
+                >
+                  {selectedGroupIds.length === filteredGroups.length && filteredGroups.length > 0 ? (
+                    <CheckSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                  ) : (
+                    <Square className="w-4 h-4 text-slate-400" />
+                  )}
+                  <span>
+                    {selectedGroupIds.length === filteredGroups.length
+                      ? 'Desmarcar Todos'
+                      : 'Selecionar Todos os Grupos'}
+                  </span>
+                </button>
+
+                <span className="text-xs font-bold text-slate-500">
+                  {selectedGroupIds.length} de {filteredGroups.length} grupos selecionados ({selectedRowsCount} contatos)
+                </span>
+              </div>
+
+              {/* Format Extraction Buttons */}
+              <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
+                <button
+                  onClick={exportCsv}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-500/20 transition-all"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Baixar CSV</span>
+                </button>
+
+                <button
+                  onClick={exportExcel}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-green-700 dark:text-green-300 bg-green-50 dark:bg-green-500/10 hover:bg-green-100 border border-green-200 dark:border-green-500/20 transition-all"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-green-600" />
+                  <span>Baixar Excel</span>
+                </button>
+
+                <button
+                  onClick={exportTxt}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-500/10 hover:bg-sky-100 border border-sky-200 dark:border-sky-500/20 transition-all"
+                >
+                  <FileText className="w-3.5 h-3.5 text-sky-600" />
+                  <span>Baixar TXT</span>
+                </button>
+
+                <button
+                  onClick={() => handleSendToDisparador(getSelectedExportRows())}
+                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-500/20 transition-all"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Disparar para Selecionados</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Search Input */}
+            <div className="relative w-full">
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
               <input
                 type="text"
-                placeholder="Buscar por nome do grupo ou descrição..."
+                placeholder="Filtrar grupos por nome ou descrição..."
                 value={groupSearch}
                 onChange={(e) => setGroupSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 text-xs rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm"
+                className="w-full pl-10 pr-4 py-2.5 text-xs rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
           </div>
 
+          {/* Groups List Grid */}
           {loading ? (
             <div className="p-12 text-center text-slate-400 text-xs flex flex-col items-center gap-2">
               <RefreshCw className="w-6 h-6 animate-spin text-indigo-500" />
@@ -627,23 +788,39 @@ export default function ExtratorPage() {
             </div>
           ) : filteredGroups.length === 0 ? (
             <div className="p-12 text-center text-slate-400 text-xs bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
-              Nenhum grupo encontrado.
+              Nenhum grupo encontrado com este filtro.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredGroups.map((group) => {
+                const isSelected = selectedGroupIds.includes(group.id);
                 const adminCount = group.participants.filter((p) => p.admin).length;
 
                 return (
                   <div
                     key={group.id}
-                    className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+                    onClick={() => toggleGroupSelect(group.id)}
+                    className={`p-5 rounded-3xl bg-white dark:bg-slate-900 border transition-all cursor-pointer flex flex-col justify-between space-y-4 ${
+                      isSelected
+                        ? 'border-indigo-500 dark:border-indigo-500 ring-2 ring-indigo-500/20 shadow-md'
+                        : 'border-slate-200 dark:border-slate-800/80 hover:border-slate-300'
+                    }`}
                   >
                     <div className="space-y-2">
                       <div className="flex items-start justify-between gap-2">
-                        <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100 line-clamp-1">
-                          {group.subject}
-                        </h3>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {/* Checkbox */}
+                          <div className="shrink-0 text-indigo-600 dark:text-indigo-400">
+                            {isSelected ? (
+                              <CheckSquare className="w-5 h-5 fill-indigo-500/20" />
+                            ) : (
+                              <Square className="w-5 h-5 text-slate-300 dark:text-slate-600" />
+                            )}
+                          </div>
+                          <h3 className="font-extrabold text-sm text-slate-900 dark:text-slate-100 line-clamp-1">
+                            {group.subject}
+                          </h3>
+                        </div>
                         <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
                           {group.size} membros
                         </span>
@@ -664,7 +841,10 @@ export default function ExtratorPage() {
 
                     <div className="pt-3 border-t border-slate-100 dark:border-slate-800/60 flex items-center gap-2">
                       <button
-                        onClick={() => setSelectedGroup(group)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedGroup(group);
+                        }}
                         className="flex-1 py-2 px-3 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/80 transition-all flex items-center justify-center gap-1.5"
                       >
                         <Users className="w-3.5 h-3.5" />
@@ -672,17 +852,10 @@ export default function ExtratorPage() {
                       </button>
 
                       <button
-                        onClick={() =>
-                          exportCsv(`grupo_${group.subject.replace(/[^a-zA-Z0-9]/g, '_')}`, group.participants)
-                        }
-                        title="Baixar CSV dos membros deste grupo"
-                        className="p-2 rounded-xl text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 transition-all"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-
-                      <button
-                        onClick={() => handleSendToDisparador(group.participants)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSendToDisparador(group.participants);
+                        }}
                         title="Enviar membros direto para o Disparador"
                         className="p-2 rounded-xl text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-all"
                       >
@@ -713,13 +886,6 @@ export default function ExtratorPage() {
             </div>
 
             <div className="flex items-center gap-2 w-full md:w-auto">
-              <button
-                onClick={() => exportCsv('agenda_contatos', filteredContacts)}
-                className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 transition-all"
-              >
-                <Download className="w-4 h-4" />
-                <span>Exportar CSV ({filteredContacts.length})</span>
-              </button>
               <button
                 onClick={() => handleSendToDisparador(filteredContacts)}
                 className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-500/20 transition-all"
@@ -984,15 +1150,6 @@ export default function ExtratorPage() {
               </div>
 
               <div className="flex items-center gap-2 w-full md:w-auto">
-                <button
-                  onClick={() =>
-                    exportCsv(`grupo_${selectedGroup.subject.replace(/[^a-zA-Z0-9]/g, '_')}`, selectedGroup.participants)
-                  }
-                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 hover:bg-indigo-100 transition-all"
-                >
-                  <Download className="w-3.5 h-3.5" /> Exportar CSV
-                </button>
-
                 <button
                   onClick={() => handleSendToDisparador(selectedGroup.participants)}
                   className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-all shadow-sm"
