@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - traefik-net
+      - impulsionet
 
   # Next.js Web App Container
   allwhatspy-web:
@@ -28,11 +28,10 @@ services:
       - PORT=3000
       - DATABASE_URL=postgresql://allwhatspy:allwhatspy_secret_pass@postgres:5432/allwhatspy_db?schema=public
     networks:
-      - traefik-net
+      - impulsionet
     labels:
       - "traefik.enable=true"
-      # Substitua painel.seu-dominio.com.br pelo seu subdomínio real
-      - "traefik.http.routers.allwhatspy.rule=Host(`painel.seu-dominio.com.br`)"
+      - "traefik.http.routers.allwhatspy.rule=Host(`painel.anexohub.com.br`)"
       - "traefik.http.routers.allwhatspy.entrypoints=websecure"
       - "traefik.http.routers.allwhatspy.tls.certresolver=letsencrypt"
       - "traefik.http.services.allwhatspy.loadbalancer.server.port=3000"
@@ -41,5 +40,5 @@ volumes:
   postgres_data:
 
 networks:
-  traefik-net:
+  impulsionet:
     external: true
