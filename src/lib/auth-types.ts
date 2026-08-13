@@ -4,6 +4,7 @@ export type PermissionKey =
   | 'module_whatsapp_disparador'
   | 'module_whatsapp_config'
   | 'module_whatsapp_logs'
+  | 'module_whatsapp_extrator'
   | 'module_email_disparador'
   | 'module_email_config'
   | 'module_users_admin'
@@ -38,6 +39,12 @@ export const ALL_PERMISSIONS: UserPermissionDefinition[] = [
     label: 'Logs WhatsApp',
     category: 'módulo',
     description: 'Acesso aos relatórios e logs de disparos do WhatsApp.',
+  },
+  {
+    key: 'module_whatsapp_extrator',
+    label: 'Extrator de Contatos & Grupos',
+    category: 'módulo',
+    description: 'Extração de contatos da agenda, grupos e membros de grupos do WhatsApp.',
   },
   {
     key: 'module_email_disparador',

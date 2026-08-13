@@ -80,6 +80,20 @@ export default function DisparadorPage() {
 
   useEffect(() => {
     fetchInstancesFromVps();
+
+    // Check if there are contacts imported from Extractor
+    if (typeof window !== 'undefined') {
+      const imported = localStorage.getItem('awp_imported_contacts');
+      if (imported) {
+        try {
+          const parsed = JSON.parse(imported);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setContacts(parsed);
+          }
+        } catch {}
+        localStorage.removeItem('awp_imported_contacts');
+      }
+    }
   }, []);
 
   // Poll server for active background campaign progress & sync reports
