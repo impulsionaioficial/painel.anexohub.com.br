@@ -830,15 +830,6 @@ export default function ExtratorPage() {
               {/* Format Extraction Buttons */}
               <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
                 <button
-                  onClick={() => handleResolveLids()}
-                  disabled={resolvingLids}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 border border-amber-200 dark:border-amber-500/20 transition-all disabled:opacity-50"
-                >
-                  <Search className={`w-3.5 h-3.5 ${resolvingLids ? 'animate-spin' : ''}`} />
-                  <span>{resolvingLids ? 'Buscando...' : 'Revelar Números (LID)'}</span>
-                </button>
-
-                <button
                   onClick={exportCsv}
                   className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-500/20 transition-all"
                 >
@@ -1255,15 +1246,6 @@ export default function ExtratorPage() {
               </div>
 
               <div className="flex items-center gap-2 w-full md:w-auto">
-                <button
-                  onClick={() => handleResolveLids(selectedGroup)}
-                  disabled={resolvingLids}
-                  className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 hover:bg-amber-100 border border-amber-200 dark:border-amber-500/20 transition-all disabled:opacity-50"
-                >
-                  <Search className={`w-3.5 h-3.5 ${resolvingLids ? 'animate-spin' : ''}`} />
-                  <span>{resolvingLids ? 'Buscando...' : 'Revelar Números (LID)'}</span>
-                </button>
-
                 <button
                   onClick={() => handleSendToDisparador(selectedGroup.participants)}
                   className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-all shadow-sm"

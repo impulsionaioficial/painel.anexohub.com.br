@@ -126,7 +126,6 @@ export async function POST(request: Request) {
       const participants = rawParticipants
         .map((p: any) => {
           let pJid = '';
-          let phoneCandidate = '';
 
           if (typeof p === 'string') {
             pJid = p;
@@ -179,6 +178,59 @@ export async function POST(request: Request) {
         participants,
       };
     });
+
+    // 3. AUTOMATIC RESOLUTION: Collect unresolved LIDs and query fetchProfile server-side
+    const unresolvedLids = new Set<string>();
+    groups.forEach((g: any) => {
+      g.participants.forEach((p: any) => {
+        if (p.isLid || p.phone.length > 13) {
+          unresolvedLids.add(p.phone);
+        }
+      });
+    });
+
+    if (unresolvedLids.size > 0) {
+      const lidsArray = Array.from(unresolvedLids).slice(0, 100);
+      await Promise.all(
+        lidsArray.map(async (lid: string) => {
+          try {
+            const targetLid = lid.includes('@') ? lid : `${lid}@lid`;
+            const profileRes = await fetch(`${cleanBaseUrl}/chat/fetchProfile/${instanceName}`, {
+              method: 'POST',
+              headers: { 'apikey': apiKey, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ number: targetLid }),
+              cache: 'no-store',
+            });
+
+            if (profileRes.ok) {
+              const profileData = await profileRes.json();
+              const rawWuid = profileData.wuid || profileData.jid || profileData.number || profileData.id || '';
+              const realPhone = String(rawWuid).split('@')[0].split(':')[0].replace(/\D/g, '');
+
+              if (realPhone && realPhone.length >= 10 && realPhone.length <= 13) {
+                lidToPhoneMap.set(lid, realPhone);
+              }
+            }
+          } catch {}
+        })
+      );
+
+      // Re-apply resolution map to all group participants automatically
+      groups.forEach((g: any) => {
+        g.participants = g.participants.map((p: any) => {
+          if ((p.isLid || p.phone.length > 13) && lidToPhoneMap.has(p.phone)) {
+            const realPhone = lidToPhoneMap.get(p.phone)!;
+            return {
+              ...p,
+              phone: realPhone,
+              name: p.name && !p.name.includes('Membro') ? p.name : `+${realPhone}`,
+              isLid: false,
+            };
+          }
+          return p;
+        });
+      });
+    }
 
     return NextResponse.json({
       success: true,

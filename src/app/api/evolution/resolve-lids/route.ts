@@ -1,5 +1,12 @@
 import { NextResponse } from 'next/server';
 
+export async function GET() {
+  return NextResponse.json({
+    success: true,
+    message: 'Rota de resolucao de LIDs ativa. Use metodo POST para enviar lista de LIDs.',
+  });
+}
+
 export async function POST(request: Request) {
   try {
     const { baseUrl, apiKey, instanceName, lids } = await request.json();
@@ -47,8 +54,8 @@ export async function POST(request: Request) {
       }
     } catch {}
 
-    // 2. For remaining unresolved LIDs, query fetchProfile on Evolution API (batch limit 50)
-    const unresolvedLids = lids.filter((lid: string) => !resolvedMap[lid]).slice(0, 50);
+    // 2. For remaining unresolved LIDs, query fetchProfile on Evolution API
+    const unresolvedLids = lids.filter((lid: string) => !resolvedMap[lid]).slice(0, 100);
 
     await Promise.all(
       unresolvedLids.map(async (lid: string) => {
