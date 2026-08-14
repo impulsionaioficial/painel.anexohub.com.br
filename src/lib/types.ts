@@ -64,6 +64,38 @@ export interface DetailedReportItem {
   instanceName: string;
 }
 
+// --- QUEUE / MULTI-CAMPAIGN TYPES ---
+
+export type QueueExecutionMode = 'sequential' | 'parallel';
+export type QueueCampaignStatus = 'queued' | 'running' | 'paused' | 'completed' | 'stopped';
+
+export interface QueueCampaignAttachment {
+  name: string;
+  base64: string;
+  mimetype: string;
+  sizeKb: number;
+}
+
+export interface QueueCampaignItem {
+  id: string;
+  title: string;
+  contacts: ContactItem[];
+  messageTemplate: string;
+  attachment?: QueueCampaignAttachment;
+  selectedInstances: string[];
+  enableSpintax: boolean;
+  minDelay: number;
+  maxDelay: number;
+  executionMode: QueueExecutionMode;
+  order: number;
+  status: QueueCampaignStatus;
+  sentCount: number;
+  errorCount: number;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface ScheduledTaskAttachment {
   name: string;
   base64: string;

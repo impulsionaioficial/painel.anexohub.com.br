@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
-import { Send, Upload, Plus, Trash2, Play, Pause, Sparkles, Clock, FileText, Info, Calendar, BarChart3, Paperclip, X, Image as ImageIcon, FileCheck, Layers, StopCircle, RefreshCw, MessageSquare } from 'lucide-react';
-import { ContactItem, LogEntry, DetailedReportItem } from '@/lib/types';
+import { Send, Upload, Plus, Trash2, Play, Pause, Sparkles, Clock, FileText, Info, Calendar, BarChart3, Paperclip, X, Image as ImageIcon, FileCheck, Layers, StopCircle, RefreshCw, MessageSquare, ListOrdered } from 'lucide-react';
+import { ContactItem, LogEntry, DetailedReportItem, QueueCampaignItem } from '@/lib/types';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
 import ReportTable from '@/components/ReportTable';
+import CampaignQueueManager from '@/components/CampaignQueueManager';
 import ScheduleManager from '@/components/ScheduleManager';
 import ChatViewer from '@/components/ChatViewer';
 import { getActiveUser, hasPermission } from '@/lib/auth-store';
@@ -24,7 +25,8 @@ interface InstanceOption {
 }
 
 export default function DisparadorPage() {
-  const [activeTab, setActiveTab] = useState<'mass' | 'reports' | 'schedule' | 'chats'>('mass');
+  const [activeTab, setActiveTab] = useState<'mass' | 'queue' | 'reports' | 'schedule' | 'chats'>('mass');
+  const [reportFilterInstances, setReportFilterInstances] = useState<string[]>([]);
 
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [manualPhone, setManualPhone] = useState<string>('');
@@ -47,6 +49,11 @@ export default function DisparadorPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleViewQueueCampaignReport = (camp: QueueCampaignItem) => {
+    setReportFilterInstances(camp.selectedInstances);
+    setActiveTab('reports');
+  };
 
   // Fetch all instances from VPS for multi-instance selection
   const fetchInstancesFromVps = async () => {
@@ -324,7 +331,18 @@ export default function DisparadorPage() {
               : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
           }`}
         >
-          <Send className="w-4 h-4" /> Disparo em Massa
+          <Send className="w-4 h-4" /> Disparo Instantâneo
+        </button>
+
+        <button
+          onClick={() => setActiveTab('queue')}
+          className={`shrink-0 md:flex-1 py-3 px-4 rounded-xl font-bold text-xs transition-all duration-200 flex items-center justify-center gap-2 whitespace-nowrap ${
+            activeTab === 'queue'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+          }`}
+        >
+          <ListOrdered className="w-4 h-4" /> Fila de Disparos
         </button>
 
         <button
@@ -392,7 +410,13 @@ export default function DisparadorPage() {
       )}
 
       {/* Tab Content Render */}
-      {activeTab === 'reports' && <ReportTable />}
+      {activeTab === 'queue' && (
+        <CampaignQueueManager onViewReport={handleViewQueueCampaignReport} />
+      )}
+
+      {activeTab === 'reports' && (
+        <ReportTable initialInstances={reportFilterInstances} />
+      )}
 
       {activeTab === 'schedule' && <ScheduleManager />}
 

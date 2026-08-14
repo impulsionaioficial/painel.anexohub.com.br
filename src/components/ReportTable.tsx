@@ -69,23 +69,38 @@ function parseReportDate(dateStr: string): Date | null {
   return isNaN(dFallback.getTime()) ? null : dFallback;
 }
 
-export default function ReportTable() {
+interface ReportTableProps {
+  initialInstances?: string[];
+  initialSearch?: string;
+}
+
+export default function ReportTable({ initialInstances, initialSearch }: ReportTableProps = {}) {
   const [reports, setReports] = useState<DetailedReportItem[]>([]);
   const [instancesList, setInstancesList] = useState<string[]>([]);
   const [loadingSync, setLoadingSync] = useState<boolean>(false);
 
   // Filters State
   const [filterStatus, setFilterStatus] = useState<'all' | 'success' | 'error' | 'pending'>('all');
-  const [selectedFilterInstances, setSelectedFilterInstances] = useState<string[]>([]);
+  const [selectedFilterInstances, setSelectedFilterInstances] = useState<string[]>(initialInstances || []);
   const [instanceDropdownOpen, setInstanceDropdownOpen] = useState<boolean>(false);
   const [instanceSearch, setInstanceSearch] = useState<string>('');
   const instanceDropdownRef = useRef<HTMLDivElement>(null);
 
   const [filterPeriod, setFilterPeriod] = useState<PeriodFilterType>('all');
   const [filterCategory, setFilterCategory] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>(initialSearch || '');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+
+  // Sync initial props if changed
+  useEffect(() => {
+    if (initialInstances && initialInstances.length > 0) {
+      setSelectedFilterInstances(initialInstances);
+    }
+    if (initialSearch !== undefined) {
+      setSearchQuery(initialSearch);
+    }
+  }, [initialInstances, initialSearch]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
