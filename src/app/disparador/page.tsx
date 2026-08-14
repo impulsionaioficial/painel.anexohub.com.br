@@ -6,6 +6,7 @@ import { Send, Upload, Plus, Trash2, Play, Pause, Sparkles, Clock, FileText, Inf
 import { ContactItem, LogEntry, DetailedReportItem, QueueCampaignItem } from '@/lib/types';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
+import { addStoredQueueCampaign, updateStoredQueueCampaign } from '@/lib/queue-store';
 import ReportTable from '@/components/ReportTable';
 import CampaignQueueManager from '@/components/CampaignQueueManager';
 import ScheduleManager from '@/components/ScheduleManager';
@@ -117,7 +118,29 @@ export default function DisparadorPage() {
         if (camp.contacts && camp.contacts.length > 0) {
           setContacts(camp.contacts);
           const done = camp.contacts.filter((c: any) => c.status === 'sent').length;
+          const errors = camp.contacts.filter((c: any) => c.status === 'error').length;
           setSentCount(done);
+
+          // Synchronize to Queue Store
+          addStoredQueueCampaign({
+            id: camp.id,
+            title: camp.title || `Disparo Instantâneo (${camp.startedAt || new Date().toLocaleTimeString('pt-BR')})`,
+            contacts: camp.contacts,
+            messageTemplate: camp.messageTemplate || '',
+            attachment: camp.attachment,
+            selectedInstances: camp.selectedInstances || selectedInstances,
+            enableSpintax: Boolean(camp.enableSpintax),
+            minDelay: camp.minDelay || 10,
+            maxDelay: camp.maxDelay || 25,
+            executionMode: 'parallel',
+            order: 1,
+            status: camp.status,
+            sentCount: done,
+            errorCount: errors,
+            createdAt: camp.startedAt || new Date().toLocaleString('pt-BR'),
+            startedAt: camp.startedAt,
+            completedAt: camp.completedAt,
+          });
         }
 
         if (camp.logs) {
@@ -291,9 +314,31 @@ export default function DisparadorPage() {
 
       const data = await res.json();
       if (data.success) {
-        setActiveCampaignId(data.campaignId);
+        const campaignId = data.campaignId;
+        setActiveCampaignId(campaignId);
         setCampaignStatus('running');
-        alert(`🟢 Campanha iniciada no Servidor com rotação entre ${selectedInstances.length} instâncias!\n\nVocê pode fechar esta aba ou o navegador a qualquer momento.`);
+
+        // Add to Queue Store so it is visible in "Fila de Disparos"
+        addStoredQueueCampaign({
+          id: campaignId,
+          title: `Disparo Instantâneo (${new Date().toLocaleTimeString('pt-BR')})`,
+          contacts: contacts.map((c) => ({ ...c })),
+          messageTemplate,
+          attachment: attachment ? attachment : undefined,
+          selectedInstances,
+          enableSpintax,
+          minDelay,
+          maxDelay,
+          executionMode: 'parallel',
+          order: 1,
+          status: 'running',
+          sentCount: 0,
+          errorCount: 0,
+          createdAt: new Date().toLocaleString('pt-BR'),
+          startedAt: new Date().toLocaleString('pt-BR'),
+        });
+
+        alert(`🟢 Campanha iniciada no Servidor com rotação entre ${selectedInstances.length} instâncias!\n\nVocê pode acompanhar aqui ou na aba "Fila de Disparos".`);
       } else {
         alert(`Erro ao iniciar no servidor: ${data.error}`);
       }
@@ -311,6 +356,18 @@ export default function DisparadorPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId: activeCampaignId, action }),
       });
+
+      if (action === 'pause') {
+        updateStoredQueueCampaign(activeCampaignId, { status: 'paused' });
+      } else if (action === 'resume') {
+        updateStoredQueueCampaign(activeCampaignId, { status: 'running' });
+      } else if (action === 'stop') {
+        updateStoredQueueCampaign(activeCampaignId, {
+          status: 'stopped',
+          completedAt: new Date().toLocaleString('pt-BR'),
+        });
+      }
+
       checkServerCampaignStatus();
     } catch {
       alert('Erro ao alterar estado da campanha');

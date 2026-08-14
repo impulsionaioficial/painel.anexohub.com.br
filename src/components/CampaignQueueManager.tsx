@@ -95,6 +95,10 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   useEffect(() => {
     loadQueue();
     fetchInstances();
+
+    // Auto-sync queue state every 2 seconds
+    const pollTimer = setInterval(loadQueue, 2000);
+    return () => clearInterval(pollTimer);
   }, []);
 
   // Queue Processing Worker (Runs sequentially or in parallel)
@@ -107,9 +111,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       (c) => c.status === 'running' && c.executionMode === 'sequential'
     );
 
-    // 1. Process Parallel Campaigns that are set to 'running'
+    // 1. Process Parallel Campaigns that are set to 'running' (only if not server-managed)
     const parallelRunning = currentQueue.filter(
-      (c) => c.status === 'running' && c.executionMode === 'parallel' && !activeRunnersRef.current.has(c.id)
+      (c) =>
+        c.status === 'running' &&
+        c.executionMode === 'parallel' &&
+        !c.id.startsWith('camp_') &&
+        !activeRunnersRef.current.has(c.id)
     );
     parallelRunning.forEach((camp) => {
       runCampaignWorker(camp.id);
@@ -126,13 +134,16 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
           startedAt: nextSequential.startedAt || new Date().toLocaleString('pt-BR'),
         });
         setQueue(getStoredQueueCampaigns());
-        runCampaignWorker(nextSequential.id);
+        if (!nextSequential.id.startsWith('camp_')) {
+          runCampaignWorker(nextSequential.id);
+        }
       }
     }
   };
 
-  // Campaign Execution Loop
+  // Campaign Execution Loop for local queue tasks
   const runCampaignWorker = async (campaignId: string) => {
+    if (campaignId.startsWith('camp_')) return; // Managed by server background runner
     if (activeRunnersRef.current.has(campaignId)) return;
     activeRunnersRef.current.add(campaignId);
 
@@ -275,23 +286,52 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     };
   }, []);
 
-  // Controls
-  const handleStartCampaign = (id: string) => {
+  // Controls with server-side campaign fallback
+  const handleStartCampaign = async (id: string) => {
+    if (id.startsWith('camp_')) {
+      try {
+        await fetch('/api/evolution/campaign/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaignId: id, action: 'resume' }),
+        });
+      } catch {}
+    }
     const updated = updateStoredQueueCampaign(id, {
       status: 'running',
       startedAt: new Date().toLocaleString('pt-BR'),
     });
     setQueue(updated);
-    runCampaignWorker(id);
+    if (!id.startsWith('camp_')) {
+      runCampaignWorker(id);
+    }
   };
 
-  const handlePauseCampaign = (id: string) => {
+  const handlePauseCampaign = async (id: string) => {
+    if (id.startsWith('camp_')) {
+      try {
+        await fetch('/api/evolution/campaign/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaignId: id, action: 'pause' }),
+        });
+      } catch {}
+    }
     const updated = updateStoredQueueCampaign(id, { status: 'paused' });
     setQueue(updated);
     activeRunnersRef.current.delete(id);
   };
 
-  const handleStopCampaign = (id: string) => {
+  const handleStopCampaign = async (id: string) => {
+    if (id.startsWith('camp_')) {
+      try {
+        await fetch('/api/evolution/campaign/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaignId: id, action: 'stop' }),
+        });
+      } catch {}
+    }
     const updated = updateStoredQueueCampaign(id, {
       status: 'stopped',
       completedAt: new Date().toLocaleString('pt-BR'),

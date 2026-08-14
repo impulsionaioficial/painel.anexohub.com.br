@@ -22,16 +22,23 @@ export function saveStoredQueueCampaigns(campaigns: QueueCampaignItem[]): void {
   localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(campaigns));
 }
 
-// Add a new queue campaign
+// Add or upsert a queue campaign
 export function addStoredQueueCampaign(campaign: QueueCampaignItem): QueueCampaignItem[] {
   if (typeof window === 'undefined') return [];
   const current = getStoredQueueCampaigns();
   
+  const existingIndex = current.findIndex((c) => c.id === campaign.id);
+  if (existingIndex >= 0) {
+    current[existingIndex] = { ...current[existingIndex], ...campaign };
+    saveStoredQueueCampaigns(current);
+    return current;
+  }
+
   // Calculate next order
   const maxOrder = current.reduce((max, c) => Math.max(max, c.order || 0), 0);
   const newCamp = {
     ...campaign,
-    order: maxOrder + 1,
+    order: campaign.order || maxOrder + 1,
   };
 
   const updated = [...current, newCamp];
