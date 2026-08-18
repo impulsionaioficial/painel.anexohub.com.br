@@ -26,7 +26,10 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-allwhatspy}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no ambiente}@postgres:5432/${POSTGRES_DB:-allwhatspy_db}?schema=public
+      # A senha dentro de DATABASE_URL precisa ter caracteres reservados
+      # codificados (por exemplo, @ vira %40). Mantemos a URL separada da
+      # senha bruta usada pelo container do PostgreSQL.
+      - DATABASE_URL=${DATABASE_URL:?Defina DATABASE_URL com a senha codificada para URL}
       - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:-admin@allwhatspy.com}
       - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?Defina ADMIN_INITIAL_PASSWORD com 12 ou mais caracteres}
       - SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY:?Defina SECRET_ENCRYPTION_KEY com 32 bytes em base64}
