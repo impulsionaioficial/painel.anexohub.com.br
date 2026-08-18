@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 function normalizeState(val: any): string {
   if (!val) return 'close';
@@ -13,6 +15,8 @@ function normalizeState(val: any): string {
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_config');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName } = await request.json();
 
@@ -27,7 +31,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
     const res = await fetch(`${cleanBaseUrl}/instance/connectionState/${instanceName}`, {
       method: 'GET',
       headers: {

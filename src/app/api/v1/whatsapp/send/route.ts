@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { validateApiKey } from '@/lib/api-key-auth';
 import { dispatchWebhookEvent } from '@/lib/webhook-dispatcher';
-import { getStoredConfig, parseSpintax } from '@/lib/evolution-store';
+import { parseSpintax } from '@/lib/evolution-store';
+import { getServerEvolutionConfig } from '@/lib/server-config';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 export async function POST(request: Request) {
   // Validate API Key
@@ -12,7 +14,7 @@ export async function POST(request: Request) {
         success: false,
         error: authResult.error || 'Não autorizado. Chave de API inválida.',
       },
-      { status: 401 }
+      { status: authResult.status || 401 }
     );
   }
 
@@ -39,6 +41,12 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
+    if (typeof message === 'string' && message.length > 20_000) {
+      return NextResponse.json({ success: false, error: 'Mensagem acima de 20.000 caracteres.' }, { status: 400 });
+    }
+    if (attachment?.base64 && String(attachment.base64).length > 10 * 1024 * 1024) {
+      return NextResponse.json({ success: false, error: 'Anexo acima do limite de 7,5 MB.' }, { status: 413 });
+    }
 
     // Format phone
     let rawPhone = String(phone).trim();
@@ -55,48 +63,26 @@ export async function POST(request: Request) {
     let finalMessage = message || '';
     if (variables && typeof variables === 'object') {
       Object.keys(variables).forEach((key) => {
-        const regex = new RegExp(`\\{${key}\\}`, 'gi');
-        finalMessage = finalMessage.replace(regex, variables[key]);
+        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`\\{${escapedKey}\\}`, 'gi');
+        finalMessage = finalMessage.replace(regex, String(variables[key]).slice(0, 2_000));
       });
     }
     finalMessage = parseSpintax(finalMessage);
 
-    // Get Evolution API config from store
-    const config = getStoredConfig();
-    const targetInstance = instanceName || config.instanceName || 'default';
+    const config = getServerEvolutionConfig();
+    const targetInstance = instanceName || config.instanceName;
     const baseUrl = config.baseUrl;
     const apiKey = config.apiKey;
 
-    // Check if live VPS config exists or demo
-    if (!baseUrl || !apiKey || baseUrl.includes('exemplo.com')) {
-      await new Promise((r) => setTimeout(r, 400));
-
-      const messageId = `AWP_API_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-      // Webhook dispatch
-      dispatchWebhookEvent('whatsapp.message.sent', {
-        messageId,
-        phone: cleanPhone,
-        message: finalMessage,
-        instanceName: targetInstance,
-        isDemo: true,
-        sentAt: new Date().toISOString(),
-        apiKeyName: authResult.apiKey?.name,
-      });
-
-      return NextResponse.json({
-        success: true,
-        isDemo: true,
-        messageId,
-        phone: cleanPhone,
-        message: finalMessage,
-        instanceName: targetInstance,
-        status: 'SENT',
-      });
+    if (!baseUrl || !apiKey || !targetInstance) {
+      return NextResponse.json({ success: false, error: 'Evolution API não configurada no servidor.' }, { status: 503 });
+    }
+    if (!/^[\w .-]{1,100}$/.test(targetInstance)) {
+      return NextResponse.json({ success: false, error: 'Nome de instância inválido.' }, { status: 400 });
     }
 
-    // Live request to Evolution API
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
     let res: Response;
 
     if (attachment && attachment.base64) {

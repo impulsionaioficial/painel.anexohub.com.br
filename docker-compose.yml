@@ -5,9 +5,9 @@ services:
     container_name: allwhatspy-postgres
     restart: always
     environment:
-      POSTGRES_USER: allwhatspy
-      POSTGRES_PASSWORD: allwhatspy_secret_pass
-      POSTGRES_DB: allwhatspy_db
+      POSTGRES_USER: ${POSTGRES_USER:-allwhatspy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no ambiente}
+      POSTGRES_DB: ${POSTGRES_DB:-allwhatspy_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -26,7 +26,23 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - DATABASE_URL=postgresql://allwhatspy:allwhatspy_secret_pass@postgres:5432/allwhatspy_db?schema=public
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-allwhatspy}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no ambiente}@postgres:5432/${POSTGRES_DB:-allwhatspy_db}?schema=public
+      - ADMIN_INITIAL_EMAIL=${ADMIN_INITIAL_EMAIL:-admin@allwhatspy.com}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:?Defina ADMIN_INITIAL_PASSWORD com 12 ou mais caracteres}
+      - SECRET_ENCRYPTION_KEY=${SECRET_ENCRYPTION_KEY:?Defina SECRET_ENCRYPTION_KEY com 32 bytes em base64}
+      - EVOLUTION_ALLOWED_HOSTS=${EVOLUTION_ALLOWED_HOSTS:-}
+      - EVOLUTION_API_URL=${EVOLUTION_API_URL:-}
+      - EVOLUTION_API_KEY=${EVOLUTION_API_KEY:-}
+      - EVOLUTION_INSTANCE_NAME=${EVOLUTION_INSTANCE_NAME:-}
+      - WEBHOOK_ALLOWED_HOSTS=${WEBHOOK_ALLOWED_HOSTS:-}
+      - SMTP_ALLOWED_HOSTS=${SMTP_ALLOWED_HOSTS:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-AllWhatsPy}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-}
     networks:
       - default
       - Impulsinet

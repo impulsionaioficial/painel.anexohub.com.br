@@ -2,15 +2,55 @@ import { QueueCampaignItem } from './types';
 
 const QUEUE_STORAGE_KEY = 'awp_queue_campaigns';
 
+const DEFAULT_PAUSE_ON_ERRORS = ['SENDER_BLOCKED', 'TIMEOUT'] as const;
+
+function normalizeCampaign(campaign: QueueCampaignItem): QueueCampaignItem {
+  const contacts = Array.isArray(campaign.contacts)
+    ? campaign.contacts.map((contact) => ({
+        ...contact,
+        selectedForSending: contact.selectedForSending !== false,
+        status: contact.status,
+        attemptCount: contact.attemptCount || 0,
+      }))
+    : [];
+
+  return {
+    ...campaign,
+    contacts,
+    selectedInstances: Array.isArray(campaign.selectedInstances) ? campaign.selectedInstances : [],
+    errorPolicy: campaign.errorPolicy || { pauseOn: [...DEFAULT_PAUSE_ON_ERRORS] },
+    sentCount: contacts.filter((contact) => contact.status === 'sent').length,
+    errorCount: contacts.filter((contact) => contact.status === 'error').length,
+  };
+}
+
+/** Recupera de refresh/fechamento da aba sem reenviar contatos já concluídos. */
+export function recoverInterruptedQueueCampaigns(): QueueCampaignItem[] {
+  const campaigns = getStoredQueueCampaigns();
+  const recovered = campaigns.map((campaign) => {
+    if (campaign.status !== 'running' || campaign.id.startsWith('camp_')) return campaign;
+    return {
+      ...campaign,
+      status: 'paused' as const,
+      pauseReason: 'A execução foi interrompida pelo recarregamento da página. Revise e clique em Continuar.',
+      contacts: campaign.contacts.map((contact) =>
+        contact.status === 'sending' ? { ...contact, status: 'pending' as const } : contact
+      ),
+    };
+  });
+  saveStoredQueueCampaigns(recovered);
+  return recovered;
+}
+
 // Load all queue campaigns sorted by order
 export function getStoredQueueCampaigns(): QueueCampaignItem[] {
   if (typeof window === 'undefined') return [];
-  const saved = localStorage.getItem(QUEUE_STORAGE_KEY);
+  const saved = sessionStorage.getItem(QUEUE_STORAGE_KEY);
   if (!saved) return [];
   try {
     const parsed: QueueCampaignItem[] = JSON.parse(saved);
     if (!Array.isArray(parsed)) return [];
-    return parsed.sort((a, b) => a.order - b.order);
+    return parsed.map(normalizeCampaign).sort((a, b) => a.order - b.order);
   } catch {
     return [];
   }
@@ -19,7 +59,7 @@ export function getStoredQueueCampaigns(): QueueCampaignItem[] {
 // Overwrite all queue campaigns
 export function saveStoredQueueCampaigns(campaigns: QueueCampaignItem[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(campaigns));
+  sessionStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(campaigns.map(normalizeCampaign)));
 }
 
 // Add or upsert a queue campaign

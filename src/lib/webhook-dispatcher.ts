@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import { prisma } from './prisma';
+import { assertSafeOutboundUrl } from './network-safety';
+import { decryptSecret } from './secret-crypto';
 
 export interface WebhookEventPayload {
   event: 'whatsapp.message.sent' | 'whatsapp.message.error' | 'whatsapp.connection.update' | 'email.sent' | 'email.error';
@@ -63,14 +65,16 @@ export async function sendWebhookHttpRequest(
   event: string,
   payloadString: string
 ): Promise<{ success: boolean; statusCode?: number; responseBody?: string }> {
-  const signature = crypto.createHmac('sha256', secret || 'default_secret').update(payloadString).digest('hex');
+  if (!secret) return { success: false, statusCode: 0, responseBody: 'Webhook sem segredo configurado.' };
+  const signature = crypto.createHmac('sha256', decryptSecret(secret)).update(payloadString).digest('hex');
 
   let statusCode = 500;
   let responseBody = '';
   let status: 'success' | 'failed' = 'failed';
 
   try {
-    const res = await fetch(url, {
+    const safeUrl = await assertSafeOutboundUrl(url, { allowlistVariable: 'WEBHOOK_ALLOWED_HOSTS' });
+    const res = await fetch(safeUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -80,10 +84,12 @@ export async function sendWebhookHttpRequest(
       },
       body: payloadString,
       signal: AbortSignal.timeout(8000), // 8s timeout
+      redirect: 'error',
     });
 
     statusCode = res.status;
-    responseBody = await res.text();
+    const contentLength = Number(res.headers.get('content-length') || 0);
+    responseBody = contentLength > 1000 ? 'Resposta omitida: tamanho acima do limite.' : (await res.text()).substring(0, 1000);
 
     if (res.ok) {
       status = 'success';
@@ -102,7 +108,7 @@ export async function sendWebhookHttpRequest(
         event,
         payload: payloadString,
         statusCode,
-        responseBody: responseBody.substring(0, 1000), // truncate if too long
+        responseBody,
         status,
       },
     });
@@ -116,7 +122,7 @@ export async function sendWebhookHttpRequest(
       event,
       payload: payloadString,
       statusCode,
-      responseBody: responseBody.substring(0, 1000),
+      responseBody,
       status,
       createdAt: new Date().toLocaleString('pt-BR'),
     });

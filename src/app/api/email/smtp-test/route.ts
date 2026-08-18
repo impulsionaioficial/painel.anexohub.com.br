@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeHost } from '@/lib/network-safety';
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'can_manage_smtp');
+  if (authError) return authError;
   try {
     const { host, port, secure, user, pass, fromEmail, testRecipient } = await request.json();
 
@@ -22,16 +26,22 @@ export async function POST(request: Request) {
 
     const senderEmail = fromEmail || user;
     const smtpHostDomain = String(host).trim();
+    const smtpPort = Number(port);
+    if (![465, 587, 2525].includes(smtpPort)) {
+      return NextResponse.json({ success: false, error: 'Porta SMTP não permitida.' }, { status: 400 });
+    }
+    await assertSafeHost(smtpHostDomain, 'SMTP_ALLOWED_HOSTS');
 
     const transporter = nodemailer.createTransport({
       host: smtpHostDomain,
-      port: Number(port),
+      port: smtpPort,
       secure: Boolean(secure),
+      requireTLS: !Boolean(secure),
       name: smtpHostDomain, // HELO matches hostinger/gmail SMTP server domain
       auth: { user, pass },
-      tls: {
-        rejectUnauthorized: false,
-      },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
 
     // Verify SMTP connection

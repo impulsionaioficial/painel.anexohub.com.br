@@ -6,7 +6,8 @@ import { Key, Webhook as WebhookIcon, History, Code, Plus, Trash2, Copy, Check, 
 interface ApiKeyItem {
   id: string;
   name: string;
-  key: string;
+  key?: string;
+  keyPreview: string;
   status: string;
   createdAt: string;
   lastUsedAt?: string;
@@ -17,7 +18,8 @@ interface WebhookItem {
   name: string;
   url: string;
   events: string[];
-  secret: string;
+  secret?: string;
+  secretConfigured?: boolean;
   status: string;
   createdAt: string;
 }
@@ -51,6 +53,7 @@ export default function IntegrationsPage() {
     'whatsapp.message.sent',
     'whatsapp.message.error',
   ]);
+  const [createdWebhookSecret, setCreatedWebhookSecret] = useState<string | null>(null);
 
   // Logs state
   const [webhookLogs, setWebhookLogs] = useState<WebhookLogItem[]>([]);
@@ -168,6 +171,7 @@ export default function IntegrationsPage() {
       });
       const data = await res.json();
       if (data.success) {
+        setCreatedWebhookSecret(data.webhook.secret);
         setWhName('');
         setWhUrl('');
         setActionSuccess('Webhook cadastrado com sucesso!');
@@ -383,7 +387,7 @@ export default function IntegrationsPage() {
                       <tr key={item.id} className="hover:bg-slate-800/30">
                         <td className="p-3 font-semibold text-slate-100">{item.name}</td>
                         <td className="p-3 font-mono text-indigo-400">
-                          {item.key.substring(0, 12)}...{item.key.substring(item.key.length - 4)}
+                          {item.keyPreview}
                         </td>
                         <td className="p-3">
                           {item.status === 'active' ? (
@@ -491,6 +495,27 @@ export default function IntegrationsPage() {
             </div>
           </form>
 
+          {createdWebhookSecret && (
+            <div className="p-6 rounded-2xl bg-indigo-950/80 border border-indigo-500/40 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                  <Shield className="w-4 h-4" /> Copie o segredo HMAC agora
+                </span>
+                <button onClick={() => setCreatedWebhookSecret(null)} className="text-slate-400 hover:text-white text-xs">Fechar</button>
+              </div>
+              <p className="text-xs text-slate-300">O segredo não será exibido novamente.</p>
+              <div className="flex items-center gap-2 p-3 rounded-xl bg-slate-950 border border-indigo-900 font-mono text-sm text-indigo-300">
+                <span className="flex-1 truncate">{createdWebhookSecret}</span>
+                <button
+                  onClick={() => handleCopy(createdWebhookSecret, 'new_webhook_secret')}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"
+                >
+                  {copiedText === 'new_webhook_secret' ? 'Copiado!' : 'Copiar'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Registered Webhooks List */}
           <div className="p-6 rounded-2xl bg-slate-900/40 border border-slate-800 space-y-4">
             <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider">Webhooks Cadastrados</h3>
@@ -518,13 +543,9 @@ export default function IntegrationsPage() {
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        onClick={() => handleCopy(wh.secret, wh.id)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 text-xs font-semibold hover:text-white flex items-center gap-1"
-                      >
-                        {copiedText === wh.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        {copiedText === wh.id ? 'Segredo Copiado!' : 'Copiar Segredo HMAC'}
-                      </button>
+                      <span className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 text-xs font-semibold">
+                        Segredo protegido
+                      </span>
                       <button
                         onClick={() => handleDeleteWebhook(wh.id)}
                         className="p-2 rounded-xl bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 text-xs transition-all"

@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { inMemoryWebhookLogs, sendWebhookHttpRequest } from '@/lib/webhook-dispatcher';
+import { requireSession } from '@/lib/server-auth';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const authError = await requireSession(request, 'module_integrations');
+  if (authError) return authError;
   try {
     const logs = await prisma.webhookLog.findMany({
       take: 100,
@@ -35,6 +38,8 @@ export async function GET() {
 
 // POST endpoint to re-send (retry) a log
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_integrations');
+  if (authError) return authError;
   try {
     const { logId } = await request.json();
     if (!logId) {

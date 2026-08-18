@@ -29,6 +29,10 @@ export interface ContactItem {
   errorMessage?: string;
   errorCategory?: 'NUMBER_NOT_EXISTS' | 'SENDER_BLOCKED' | 'USER_BLOCKED' | 'TIMEOUT' | 'UNKNOWN';
   sentAt?: string;
+  /** Quando false, o contato permanece na campanha, mas não entra no disparo. */
+  selectedForSending?: boolean;
+  lastInstanceName?: string;
+  attemptCount?: number;
 }
 
 export interface CampaignData {
@@ -69,6 +73,11 @@ export interface DetailedReportItem {
 export type QueueExecutionMode = 'sequential' | 'parallel';
 export type QueueCampaignStatus = 'queued' | 'running' | 'paused' | 'completed' | 'stopped';
 
+export interface QueueErrorPolicy {
+  /** Categorias que pausam a fila imediatamente. As demais são registradas e ignoradas. */
+  pauseOn: ErrorCategoryType[];
+}
+
 export interface QueueCampaignAttachment {
   name: string;
   base64: string;
@@ -94,6 +103,9 @@ export interface QueueCampaignItem {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  errorPolicy?: QueueErrorPolicy;
+  pauseReason?: string;
+  lastErrorCategory?: ErrorCategoryType;
 }
 
 export interface ScheduledTaskAttachment {

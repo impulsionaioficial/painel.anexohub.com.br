@@ -8,7 +8,7 @@ export const DEFAULT_CONFIG: EvolutionConfig = {
 
 export function getStoredConfig(): EvolutionConfig {
   if (typeof window === 'undefined') return DEFAULT_CONFIG;
-  const saved = localStorage.getItem('awp_evolution_config');
+  const saved = sessionStorage.getItem('awp_evolution_config');
   if (!saved) return DEFAULT_CONFIG;
   try {
     return JSON.parse(saved);
@@ -19,7 +19,8 @@ export function getStoredConfig(): EvolutionConfig {
 
 export function saveStoredConfig(config: EvolutionConfig): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('awp_evolution_config', JSON.stringify(config));
+  localStorage.removeItem('awp_evolution_config');
+  sessionStorage.setItem('awp_evolution_config', JSON.stringify(config));
 }
 
 // Spin-tax parser helper: converts "{Olá|Oi|Tudo bem}" to random choice

@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/lib/server-auth';
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_email_config');
+  if (authError) return authError;
   try {
     const { keywords, platform, domainFilter } = await request.json();
 

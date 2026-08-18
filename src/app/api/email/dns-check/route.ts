@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { promises as dns } from 'dns';
+import { requireSession } from '@/lib/server-auth';
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_email_config');
+  if (authError) return authError;
   try {
     const { domain } = await request.json();
 

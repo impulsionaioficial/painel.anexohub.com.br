@@ -1,5 +1,19 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Fila de disparos personalizável
+
+Cada campanha da aba **Fila de Disparos** possui o botão **Personalizar**. O editor permite:
+
+- trocar título, mensagem, anexo, delay e modo de execução;
+- adicionar ou remover instâncias da rotação;
+- marcar individualmente quais contatos entram no disparo;
+- remover contatos e reenviar uma falha ou um contato já processado;
+- escolher, por categoria, quais erros pausam a fila e quais apenas são registrados.
+
+Por padrão, instância/sessão desconectada e timeout pausam a campanha. Número inválido e bloqueio pelo destinatário não interrompem os demais contatos. Ao pausar, parar ou recarregar a página, contatos enviados permanecem concluídos e contatos ainda não processados podem ser retomados com **Continuar**.
+
+As filas locais são preservadas durante a sessão da aba. Campanhas `camp_*` executadas no servidor são sincronizadas individualmente enquanto o processo Next.js permanece ativo; reinício do servidor ainda requer persistência externa antes de oferecer retomada entre processos.
+
 ## Getting Started
 
 First, run the development server:

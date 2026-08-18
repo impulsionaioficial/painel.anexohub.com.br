@@ -1,28 +1,22 @@
 import { NextResponse } from 'next/server';
 import { validateApiKey } from '@/lib/api-key-auth';
-import { getStoredConfig } from '@/lib/evolution-store';
+import { getServerEvolutionConfig } from '@/lib/server-config';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 export async function GET(request: Request) {
   const authResult = await validateApiKey(request);
   if (!authResult.valid) {
-    return NextResponse.json({ success: false, error: authResult.error }, { status: 401 });
+    return NextResponse.json({ success: false, error: authResult.error }, { status: authResult.status || 401 });
   }
 
-  const config = getStoredConfig();
+  const config = getServerEvolutionConfig();
 
-  if (!config.baseUrl || config.baseUrl.includes('exemplo.com')) {
-    return NextResponse.json({
-      success: true,
-      isDemo: true,
-      instanceName: config.instanceName || 'instancia_demo',
-      state: 'open',
-      profileName: 'Atendimento WhatsApp Demo',
-      connectedAt: new Date().toISOString(),
-    });
+  if (!config.baseUrl || !config.apiKey || !config.instanceName) {
+    return NextResponse.json({ success: false, error: 'Evolution API não configurada no servidor.' }, { status: 503 });
   }
 
   try {
-    const cleanBaseUrl = config.baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(config.baseUrl);
     const res = await fetch(`${cleanBaseUrl}/instance/connectionState/${config.instanceName}`, {
       headers: { apikey: config.apiKey },
     });

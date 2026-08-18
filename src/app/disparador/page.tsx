@@ -91,7 +91,7 @@ export default function DisparadorPage() {
 
     // Check if there are contacts imported from Extractor
     if (typeof window !== 'undefined') {
-      const imported = localStorage.getItem('awp_imported_contacts');
+      const imported = sessionStorage.getItem('awp_imported_contacts');
       if (imported) {
         try {
           const parsed = JSON.parse(imported);
@@ -99,7 +99,7 @@ export default function DisparadorPage() {
             setContacts(parsed);
           }
         } catch {}
-        localStorage.removeItem('awp_imported_contacts');
+        sessionStorage.removeItem('awp_imported_contacts');
       }
     }
   }, []);
@@ -140,6 +140,9 @@ export default function DisparadorPage() {
             createdAt: camp.startedAt || new Date().toLocaleString('pt-BR'),
             startedAt: camp.startedAt,
             completedAt: camp.completedAt,
+            errorPolicy: camp.errorPolicy || { pauseOn: ['SENDER_BLOCKED', 'TIMEOUT'] },
+            pauseReason: camp.pauseReason,
+            lastErrorCategory: camp.lastErrorCategory,
           });
         }
 
@@ -309,6 +312,7 @@ export default function DisparadorPage() {
           apiKey: config.apiKey,
           selectedInstances,
           attachment: attachment ? attachment : undefined,
+          errorPolicy: { pauseOn: ['SENDER_BLOCKED', 'TIMEOUT'] },
         }),
       });
 
@@ -336,6 +340,7 @@ export default function DisparadorPage() {
           errorCount: 0,
           createdAt: new Date().toLocaleString('pt-BR'),
           startedAt: new Date().toLocaleString('pt-BR'),
+          errorPolicy: { pauseOn: ['SENDER_BLOCKED', 'TIMEOUT'] },
         });
 
         alert(`🟢 Campanha iniciada no Servidor com rotação entre ${selectedInstances.length} instâncias!\n\nVocê pode acompanhar aqui ou na aba "Fila de Disparos".`);

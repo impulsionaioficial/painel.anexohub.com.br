@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
-import { getActiveUser } from '@/lib/auth-store';
+import { setActiveUser } from '@/lib/auth-store';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -14,14 +14,31 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMounted(true);
+    let active = true;
 
-    const user = getActiveUser();
+    const verifyServerSession = async () => {
+      try {
+        const response = await fetch('/api/auth/me', { cache: 'no-store' });
+        const data = await response.json();
+        if (!active) return;
+        if (!response.ok || !data.user) {
+          setActiveUser(null);
+          if (pathname !== '/login') router.replace('/login');
+          return;
+        }
+        setActiveUser(data.user);
+        if (pathname === '/login') router.replace('/disparador');
+      } catch {
+        if (!active) return;
+        setActiveUser(null);
+        if (pathname !== '/login') router.replace('/login');
+      }
+    };
 
-    if (!user && pathname !== '/login') {
-      router.push('/login');
-    } else if (user && pathname === '/login') {
-      router.push('/disparador');
-    }
+    void verifyServerSession();
+    return () => {
+      active = false;
+    };
   }, [pathname, router]);
 
   // Standalone full screen view for Login Page (No Sidebar & No Header)

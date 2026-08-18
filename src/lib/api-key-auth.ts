@@ -1,101 +1,70 @@
+import 'server-only';
+
+import crypto from 'crypto';
 import { prisma } from './prisma';
+import { checkRateLimit } from './rate-limit';
 
 export interface ValidatedApiKey {
   id: string;
   name: string;
-  key: string;
   userId?: string | null;
   status: string;
 }
 
-export async function validateApiKey(request: Request): Promise<{ valid: boolean; apiKey?: ValidatedApiKey; error?: string }> {
-  // Extract API key from headers
+export function hashApiKey(key: string): string {
+  return `sha256:${crypto.createHash('sha256').update(key).digest('hex')}`;
+}
+
+export function apiKeyPreview(storedKey: string): string {
+  if (storedKey.startsWith('sha256:')) return 'awp_live_••••••••';
+  return storedKey.length > 8 ? `${storedKey.slice(0, 9)}••••${storedKey.slice(-4)}` : '••••••••';
+}
+
+export async function validateApiKey(request: Request): Promise<{ valid: boolean; apiKey?: ValidatedApiKey; error?: string; status?: number }> {
+  const contentLength = Number(request.headers.get('content-length') || 0);
+  if (!Number.isFinite(contentLength) || contentLength > 12 * 1024 * 1024) {
+    return { valid: false, error: 'Corpo da requisição acima do limite.', status: 413 };
+  }
+  const rateLimitError = checkRateLimit(request, 'api-key', 120, 60_000);
+  if (rateLimitError) return { valid: false, error: rateLimitError.error, status: rateLimitError.status };
+
   const authHeader = request.headers.get('authorization');
   const customHeader = request.headers.get('x-api-key');
-
   let keyInput = customHeader || '';
 
   if (!keyInput && authHeader) {
-    if (authHeader.toLowerCase().startsWith('bearer ')) {
-      keyInput = authHeader.substring(7).trim();
-    } else {
-      keyInput = authHeader.trim();
-    }
+    keyInput = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.substring(7).trim() : authHeader.trim();
   }
-
-  if (!keyInput) {
-    return {
-      valid: false,
-      error: 'Chave de API não informada. Utilize o header "x-api-key" ou "Authorization: Bearer <SUA_CHAVE>"',
-    };
-  }
-
-  // Fallback demo key for initial setup without DB
-  if (keyInput === 'awp_live_demo_123456') {
-    return {
-      valid: true,
-      apiKey: {
-        id: 'demo_key_id',
-        name: 'Chave Demo Inicial',
-        key: 'awp_live_demo_123456',
-        status: 'active',
-      },
-    };
+  if (!keyInput || keyInput.length > 256) {
+    return { valid: false, error: 'Chave de API ausente ou inválida.', status: 401 };
   }
 
   try {
-    const foundKey = await prisma.apiKey.findUnique({
-      where: { key: keyInput },
-    });
+    const hashedKey = hashApiKey(keyInput);
+    let foundKey = await prisma.apiKey.findUnique({ where: { key: hashedKey } });
 
     if (!foundKey) {
-      return {
-        valid: false,
-        error: 'Chave de API inválida ou inexistente.',
-      };
+      const legacyKey = await prisma.apiKey.findUnique({ where: { key: keyInput } });
+      if (legacyKey) {
+        foundKey = await prisma.apiKey.update({ where: { id: legacyKey.id }, data: { key: hashedKey } });
+      }
     }
 
-    if (foundKey.status !== 'active') {
-      return {
-        valid: false,
-        error: 'Esta Chave de API foi revogada ou desativada.',
-      };
+    if (!foundKey || foundKey.status !== 'active') {
+      return { valid: false, error: 'Chave de API inválida ou revogada.', status: 401 };
     }
 
-    // Update lastUsedAt in background
-    prisma.apiKey
-      .update({
-        where: { id: foundKey.id },
-        data: { lastUsedAt: new Date() },
-      })
-      .catch(() => {});
-
+    await prisma.apiKey.update({ where: { id: foundKey.id }, data: { lastUsedAt: new Date() } });
     return {
       valid: true,
       apiKey: {
         id: foundKey.id,
         name: foundKey.name,
-        key: foundKey.key,
         userId: foundKey.userId,
         status: foundKey.status,
       },
     };
   } catch {
-    // If DB is offline, check demo key
-    if (keyInput.startsWith('awp_live_')) {
-      return {
-        valid: true,
-        apiKey: {
-          id: `key_${keyInput.substring(9, 15)}`,
-          name: 'Chave Dinâmica (Modo Local)',
-          key: keyInput,
-          status: 'active',
-        },
-      };
-    }
-    return {
-      valid: false,
-      error: 'Erro de validação da chave de API no servidor.',
-    };
+    return { valid: false, error: 'Serviço de autenticação da API indisponível.', status: 503 };
   }
 }

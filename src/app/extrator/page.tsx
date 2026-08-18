@@ -614,7 +614,7 @@ export default function ExtratorPage() {
       status: 'pending' as const,
     }));
 
-    localStorage.setItem('awp_imported_contacts', JSON.stringify(formatted));
+    sessionStorage.setItem('awp_imported_contacts', JSON.stringify(formatted));
     showToast(`🚀 ${rows.length} contatos enviados! Redirecionando...`);
     setTimeout(() => {
       router.push('/disparador');

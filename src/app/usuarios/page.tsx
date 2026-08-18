@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Users, UserPlus, Shield, Key, Trash2, Edit3, CheckCircle2, Lock, Sparkles, Check, X } from 'lucide-react';
 import { UserAccount, PermissionKey, ALL_PERMISSIONS, UserRole } from '@/lib/auth-types';
-import { getStoredUsers, saveStoredUsers, getActiveUser } from '@/lib/auth-store';
+import { getActiveUser } from '@/lib/auth-store';
 
 export default function UsuariosPage() {
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
@@ -24,7 +24,11 @@ export default function UsuariosPage() {
 
   useEffect(() => {
     setCurrentUser(getActiveUser());
-    setUsers(getStoredUsers());
+    void fetch('/api/users', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((data) => {
+        if (data.success) setUsers(data.users || []);
+      });
   }, []);
 
   const togglePermission = (key: PermissionKey) => {
@@ -44,7 +48,7 @@ export default function UsuariosPage() {
     setSelectedPermissions([]);
   };
 
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !email) return;
 
@@ -53,18 +57,17 @@ export default function UsuariosPage() {
       return;
     }
 
-    const newUser: UserAccount = {
-      id: `usr_${Date.now()}`,
-      name,
-      email: email.trim().toLowerCase(),
-      role,
-      permissions: role === 'admin' ? ALL_PERMISSIONS.map((p) => p.key) : selectedPermissions,
-      createdAt: new Date().toLocaleDateString('pt-BR'),
-    };
-
-    const updated = [...users, newUser];
-    setUsers(updated);
-    saveStoredUsers(updated);
+    const response = await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email, password, role, permissions: selectedPermissions }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.user) {
+      alert(data.error || 'Não foi possível criar o usuário.');
+      return;
+    }
+    setUsers((current) => [...current, data.user]);
 
     setName('');
     setEmail('');
@@ -72,46 +75,46 @@ export default function UsuariosPage() {
     alert(`Usuário [${name}] criado com sucesso!`);
   };
 
-  const handleToggleUserRole = (userId: string) => {
-    const updated = users.map((u) => {
-      if (u.id === userId) {
-        const nextRole: UserRole = u.role === 'admin' ? 'user' : 'admin';
-        return {
-          ...u,
-          role: nextRole,
-          permissions: nextRole === 'admin' ? ALL_PERMISSIONS.map((p) => p.key) : u.permissions,
-        };
-      }
-      return u;
+  const handleToggleUserRole = async (userId: string) => {
+    const existing = users.find((user) => user.id === userId);
+    if (!existing) return;
+    const nextRole: UserRole = existing.role === 'admin' ? 'user' : 'admin';
+    const response = await fetch('/api/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: userId, role: nextRole, permissions: existing.permissions }),
     });
-    setUsers(updated);
-    saveStoredUsers(updated);
+    const data = await response.json();
+    if (!response.ok) return alert(data.error || 'Não foi possível atualizar o usuário.');
+    setUsers((current) => current.map((user) => (user.id === userId ? data.user : user)));
   };
 
-  const handleToggleUserPermission = (userId: string, permKey: PermissionKey) => {
-    const updated = users.map((u) => {
-      if (u.id === userId) {
-        const currentPerms = u.permissions || [];
-        const nextPerms = currentPerms.includes(permKey)
-          ? currentPerms.filter((p) => p !== permKey)
-          : [...currentPerms, permKey];
-        return { ...u, permissions: nextPerms };
-      }
-      return u;
+  const handleToggleUserPermission = async (userId: string, permKey: PermissionKey) => {
+    const existing = users.find((user) => user.id === userId);
+    if (!existing) return;
+    const nextPermissions = existing.permissions.includes(permKey)
+      ? existing.permissions.filter((permission) => permission !== permKey)
+      : [...existing.permissions, permKey];
+    const response = await fetch('/api/users', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: userId, role: existing.role, permissions: nextPermissions }),
     });
-    setUsers(updated);
-    saveStoredUsers(updated);
+    const data = await response.json();
+    if (!response.ok) return alert(data.error || 'Não foi possível atualizar a permissão.');
+    setUsers((current) => current.map((user) => (user.id === userId ? data.user : user)));
   };
 
-  const handleDeleteUser = (userId: string, userName: string) => {
-    if (userId === 'admin_default_id') {
-      alert('Não é possível excluir a conta de Administrador principal.');
-      return;
-    }
+  const handleDeleteUser = async (userId: string, userName: string) => {
     if (confirm(`Deseja excluir permanentemente o usuário [${userName}]?`)) {
-      const updated = users.filter((u) => u.id !== userId);
-      setUsers(updated);
-      saveStoredUsers(updated);
+      const response = await fetch('/api/users', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: userId }),
+      });
+      const data = await response.json();
+      if (!response.ok) return alert(data.error || 'Não foi possível excluir o usuário.');
+      setUsers((current) => current.filter((user) => user.id !== userId));
     }
   };
 
@@ -171,6 +174,7 @@ export default function UsuariosPage() {
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  minLength={12}
                   className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:outline-none focus:border-indigo-500 shadow-sm"
                   required
                 />

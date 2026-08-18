@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_config');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName } = await request.json();
 
@@ -8,7 +12,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, isDemo: true });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
     const res = await fetch(`${cleanBaseUrl}/instance/logout/${instanceName}`, {
       method: 'DELETE',
       headers: {

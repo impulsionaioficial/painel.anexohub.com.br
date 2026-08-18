@@ -1,84 +1,58 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
+import { apiKeyPreview, hashApiKey } from '@/lib/api-key-auth';
+import { requireSession } from '@/lib/server-auth';
 
-// Fallback memory store if DB is offline
-const inMemoryKeys: Array<{ id: string; name: string; key: string; status: string; createdAt: string }> = [
-  {
-    id: 'key_demo_default',
-    name: 'Chave Padrão Demo CRM',
-    key: 'awp_live_demo_123456',
-    status: 'active',
-    createdAt: new Date().toLocaleString('pt-BR'),
-  },
-];
+export async function GET(request: Request) {
+  const authError = await requireSession(request, 'module_integrations');
+  if (authError) return authError;
 
-export async function GET() {
   try {
-    const keys = await prisma.apiKey.findMany({
-      orderBy: { createdAt: 'desc' },
+    const keys = await prisma.apiKey.findMany({ orderBy: { createdAt: 'desc' } });
+    return NextResponse.json({
+      success: true,
+      keys: keys.map(({ key, ...record }) => ({ ...record, key: undefined, keyPreview: apiKeyPreview(key) })),
     });
-    return NextResponse.json({ success: true, keys });
   } catch {
-    return NextResponse.json({ success: true, keys: inMemoryKeys });
+    return NextResponse.json({ success: false, error: 'Banco de dados indisponível.' }, { status: 503 });
   }
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_integrations');
+  if (authError) return authError;
+
   try {
     const { name } = await request.json();
-    if (!name || !name.trim()) {
-      return NextResponse.json({ success: false, error: 'O nome da chave de API é obrigatório' }, { status: 400 });
+    if (typeof name !== 'string' || name.trim().length < 3 || name.length > 100) {
+      return NextResponse.json({ success: false, error: 'Informe um nome entre 3 e 100 caracteres.' }, { status: 400 });
     }
 
-    const randomBytes = crypto.randomBytes(18).toString('hex');
-    const generatedKey = `awp_live_${randomBytes}`;
-
-    try {
-      const newKey = await prisma.apiKey.create({
-        data: {
-          name: name.trim(),
-          key: generatedKey,
-          status: 'active',
-        },
-      });
-
-      return NextResponse.json({ success: true, key: newKey });
-    } catch {
-      const memoryKey = {
-        id: `key_${Date.now()}`,
-        name: name.trim(),
-        key: generatedKey,
-        status: 'active',
-        createdAt: new Date().toLocaleString('pt-BR'),
-      };
-      inMemoryKeys.unshift(memoryKey);
-      return NextResponse.json({ success: true, key: memoryKey });
-    }
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message || 'Erro ao gerar chave de API' }, { status: 500 });
+    const rawKey = `awp_live_${crypto.randomBytes(32).toString('base64url')}`;
+    const newKey = await prisma.apiKey.create({
+      data: { name: name.trim(), key: hashApiKey(rawKey), status: 'active' },
+    });
+    return NextResponse.json({
+      success: true,
+      key: { ...newKey, key: rawKey, keyPreview: apiKeyPreview(rawKey) },
+      warning: 'Copie a chave agora. Ela não será exibida novamente.',
+    });
+  } catch {
+    return NextResponse.json({ success: false, error: 'Não foi possível gerar a chave.' }, { status: 503 });
   }
 }
 
 export async function DELETE(request: Request) {
+  const authError = await requireSession(request, 'module_integrations');
+  if (authError) return authError;
+
   try {
     const { id } = await request.json();
-    if (!id) {
-      return NextResponse.json({ success: false, error: 'ID da chave é obrigatório' }, { status: 400 });
-    }
-
-    try {
-      await prisma.apiKey.update({
-        where: { id },
-        data: { status: 'revoked' },
-      });
-      return NextResponse.json({ success: true, message: 'Chave revogada com sucesso' });
-    } catch {
-      const found = inMemoryKeys.find((k) => k.id === id);
-      if (found) found.status = 'revoked';
-      return NextResponse.json({ success: true, message: 'Chave revogada com sucesso (Modo Local)' });
-    }
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message || 'Erro ao revogar chave' }, { status: 500 });
+    if (typeof id !== 'string' || !id) return NextResponse.json({ success: false, error: 'ID inválido.' }, { status: 400 });
+    await prisma.apiKey.update({ where: { id }, data: { status: 'revoked' } });
+    return NextResponse.json({ success: true, message: 'Chave revogada com sucesso.' });
+  } catch {
+    return NextResponse.json({ success: false, error: 'Não foi possível revogar a chave.' }, { status: 503 });
   }
 }

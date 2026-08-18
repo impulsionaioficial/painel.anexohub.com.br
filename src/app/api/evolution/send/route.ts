@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ErrorCategoryType } from '@/lib/types';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 function categorizeError(errText: string, status: number): { category: ErrorCategoryType; title: string } {
   const text = errText.toLowerCase();
@@ -11,7 +13,7 @@ function categorizeError(errText: string, status: number): { category: ErrorCate
     };
   }
 
-  if (status === 401 || text.includes('unauthorized') || text.includes('session closed') || text.includes('connection closed') || text.includes('logged out') || text.includes('instance disconnected')) {
+  if (status === 401 || status === 404 || text.includes('unauthorized') || text.includes('session closed') || text.includes('connection closed') || text.includes('logged out') || text.includes('instance disconnected') || text.includes('instance not found') || text.includes('instance close') || text.includes('not connected')) {
     return {
       category: 'SENDER_BLOCKED',
       title: '🔒 Sessão Desconectada / Número Disparador Suspenso',
@@ -25,7 +27,7 @@ function categorizeError(errText: string, status: number): { category: ErrorCate
     };
   }
 
-  if (text.includes('timeout') || text.includes('econnrefused') || text.includes('fetch failed') || status === 502 || status === 503 || status === 504) {
+  if (text.includes('timeout') || text.includes('econnrefused') || text.includes('fetch failed') || status === 408 || status === 502 || status === 503 || status === 504) {
     return {
       category: 'TIMEOUT',
       title: '📡 Timeout / VPS Sem Resposta',
@@ -39,6 +41,8 @@ function categorizeError(errText: string, status: number): { category: ErrorCate
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_disparador');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName, phone, message, attachment } = await request.json();
 
@@ -49,6 +53,12 @@ export async function POST(request: Request) {
         errorTitle: 'Dados incompletos',
         error: 'Telefone ou JID do destinatário é obrigatório',
       });
+    }
+    if (typeof message === 'string' && message.length > 20_000) {
+      return NextResponse.json({ success: false, error: 'Mensagem acima de 20.000 caracteres.' }, { status: 400 });
+    }
+    if (attachment?.base64 && String(attachment.base64).length > 10 * 1024 * 1024) {
+      return NextResponse.json({ success: false, error: 'Anexo acima do limite de 7,5 MB.' }, { status: 413 });
     }
 
     const rawInput = String(phone).trim();
@@ -85,7 +95,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
 
     // Helper to send text message to a specific number/JID target
     const sendTextRequest = async (target: string) => {
@@ -104,6 +114,7 @@ export async function POST(request: Request) {
             linkPreview: true,
           },
         }),
+        signal: AbortSignal.timeout(30_000),
       });
     };
 
@@ -137,6 +148,7 @@ export async function POST(request: Request) {
             presence: 'composing',
           },
         }),
+        signal: AbortSignal.timeout(30_000),
       });
 
       if (!mediaRes.ok) {

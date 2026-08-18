@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getAllServerCampaignReports } from '@/lib/campaign-runner';
+import { requireSession } from '@/lib/server-auth';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_logs');
+  if (authError) return authError;
   try {
     const reports = getAllServerCampaignReports();
     return NextResponse.json({

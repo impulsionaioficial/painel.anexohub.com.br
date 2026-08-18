@@ -43,7 +43,7 @@ export default function LogsPage() {
           combined.forEach((item) => uniqueMap.set(item.id, item));
           const updated = Array.from(uniqueMap.values()).slice(0, 200) as LogItem[];
 
-          // Persist in localStorage
+          // Persist only for the current browser session.
           saveStoredLogsHistory(updated);
 
           return updated;

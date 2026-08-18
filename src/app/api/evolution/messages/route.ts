@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 function parseMessageText(item: any): string {
   if (typeof item.message === 'string') return item.message;
@@ -34,6 +36,8 @@ function extractRawList(data: any): any[] {
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_logs');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName, remoteJid } = await request.json();
 
@@ -59,7 +63,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
 
     // Build list of candidate JIDs to query (ensuring full Baileys JID domains @s.whatsapp.net, @g.us, @lid and raw ID)
     const rawJid = String(remoteJid).trim();

@@ -43,8 +43,9 @@ export default function Header({ onToggleMobileMenu }: HeaderProps) {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     if (confirm('Deseja encerrar sua sessão?')) {
+      await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
       setActiveUser(null);
       window.location.href = '/login';
     }

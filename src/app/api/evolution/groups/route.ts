@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 // Helper function to restore Brazilian 9th digit if lost during Evolution API LID mapping (PR #2688 fix)
 function formatBrazilianPhone(phone: string): string {
@@ -14,6 +16,8 @@ function formatBrazilianPhone(phone: string): string {
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_extrator');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName } = await request.json();
 
@@ -42,7 +46,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
 
     // 1. Fetch contacts to build a LID-to-Phone map
     const lidToPhoneMap = new Map<string, string>();

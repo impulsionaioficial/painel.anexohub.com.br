@@ -3,7 +3,7 @@ import { DetailedReportItem, ScheduledTask } from './types';
 // Persistence for Detailed Reports History with automatic deduplication
 export function getStoredReports(): DetailedReportItem[] {
   if (typeof window === 'undefined') return [];
-  const saved = localStorage.getItem('awp_detailed_reports');
+  const saved = sessionStorage.getItem('awp_detailed_reports');
   if (!saved) return [];
   try {
     const parsed: DetailedReportItem[] = JSON.parse(saved);
@@ -24,7 +24,7 @@ export function getStoredReports(): DetailedReportItem[] {
 
     // If cleaned list length is different from original (duplicates existed), persist cleaned list
     if (cleaned.length !== parsed.length) {
-      localStorage.setItem('awp_detailed_reports', JSON.stringify(cleaned));
+      sessionStorage.setItem('awp_detailed_reports', JSON.stringify(cleaned));
     }
 
     return cleaned;
@@ -53,7 +53,7 @@ export function addStoredReportItem(item: DetailedReportItem): void {
     updated = [item, ...current.slice(0, 999)]; // Limit to 1000 records
   }
 
-  localStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
+  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
 }
 
 export function addStoredReportItems(items: DetailedReportItem[]): void {
@@ -82,19 +82,19 @@ export function addStoredReportItems(items: DetailedReportItem[]): void {
 
   // Convert back to array (limit to 1000 items)
   const updated = Array.from(map.values()).slice(0, 1000);
-  localStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
+  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
 }
 
 export function saveStoredReports(reports: DetailedReportItem[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('awp_detailed_reports', JSON.stringify(reports.slice(0, 1000)));
+  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(reports.slice(0, 1000)));
 }
 
 export function deleteStoredReportItem(id: string): void {
   if (typeof window === 'undefined') return;
   const current = getStoredReports();
   const updated = current.filter((r) => r.id !== id);
-  localStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
+  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
 }
 
 export function deleteStoredReportItems(ids: string[]): void {
@@ -102,18 +102,18 @@ export function deleteStoredReportItems(ids: string[]): void {
   const idsSet = new Set(ids);
   const current = getStoredReports();
   const updated = current.filter((r) => !idsSet.has(r.id));
-  localStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
+  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
 }
 
 export function clearStoredReports(): void {
   if (typeof window === 'undefined') return;
-  localStorage.removeItem('awp_detailed_reports');
+  sessionStorage.removeItem('awp_detailed_reports');
 }
 
 // Persistence for Scheduled Tasks
 export function getStoredScheduledTasks(): ScheduledTask[] {
   if (typeof window === 'undefined') return [];
-  const saved = localStorage.getItem('awp_scheduled_tasks');
+  const saved = sessionStorage.getItem('awp_scheduled_tasks');
   if (!saved) return [];
   try {
     return JSON.parse(saved);
@@ -124,7 +124,7 @@ export function getStoredScheduledTasks(): ScheduledTask[] {
 
 export function saveStoredScheduledTasks(tasks: ScheduledTask[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem('awp_scheduled_tasks', JSON.stringify(tasks));
+  sessionStorage.setItem('awp_scheduled_tasks', JSON.stringify(tasks));
 }
 
 // Calculate Next Run time string for scheduled tasks

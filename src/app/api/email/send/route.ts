@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeHost } from '@/lib/network-safety';
 
 // Helper to convert HTML content into a clean plain text version for anti-spam filters
 function htmlToPlainText(html: string): string {
@@ -20,6 +22,8 @@ function htmlToPlainText(html: string): string {
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_email_disparador');
+  if (authError) return authError;
   try {
     const { smtpAccount, recipient, subject, bodyHtml, replyTo } = await request.json();
 
@@ -46,17 +50,23 @@ export async function POST(request: Request) {
     const targetEmail = typeof recipient === 'string' ? recipient : recipient.email;
     const senderEmail = fromEmail || user;
     const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : 'domain.com';
+    const smtpPort = Number(port);
+    if (![465, 587, 2525].includes(smtpPort)) {
+      return NextResponse.json({ success: false, error: 'Porta SMTP não permitida.' }, { status: 400 });
+    }
+    await assertSafeHost(String(host), 'SMTP_ALLOWED_HOSTS');
 
     // Create Nodemailer transport with sender domain alignment
     const transporter = nodemailer.createTransport({
       host: String(host).trim(),
-      port: Number(port),
+      port: smtpPort,
       secure: Boolean(secure),
+      requireTLS: !Boolean(secure),
       name: senderDomain,
       auth: { user, pass },
-      tls: {
-        rejectUnauthorized: false,
-      },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
 
     const senderHeader = fromName ? `"${fromName}" <${senderEmail}>` : senderEmail;

@@ -1,7 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getActiveCampaign } from '@/lib/campaign-runner';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_logs');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName } = await request.json();
 
@@ -41,7 +45,7 @@ export async function POST(request: Request) {
       });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
 
     // 2. Fetch connection state from Evolution API
     const res = await fetch(`${cleanBaseUrl}/instance/connectionState/${instanceName || 'teste'}`, {

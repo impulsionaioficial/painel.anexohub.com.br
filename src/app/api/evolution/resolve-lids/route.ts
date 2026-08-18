@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
+import { requireSession } from '@/lib/server-auth';
+import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 
-export async function GET() {
+export async function GET(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_extrator');
+  if (authError) return authError;
   return NextResponse.json({
     success: true,
     message: 'Rota de resolucao de LIDs ativa. Use metodo POST para enviar lista de LIDs.',
@@ -8,6 +12,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const authError = await requireSession(request, 'module_whatsapp_extrator');
+  if (authError) return authError;
   try {
     const { baseUrl, apiKey, instanceName, lids } = await request.json();
 
@@ -23,7 +29,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, resolved: {} });
     }
 
-    const cleanBaseUrl = baseUrl.replace(/\/$/, '');
+    const cleanBaseUrl = await assertSafeEvolutionBaseUrl(baseUrl);
     const resolvedMap: Record<string, { phone: string; name?: string }> = {};
 
     // 1. Try resolving via contacts database first

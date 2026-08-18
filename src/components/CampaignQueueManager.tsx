@@ -12,7 +12,6 @@ import {
   ArrowUp,
   ArrowDown,
   Layers,
-  FileText,
   Paperclip,
   Sparkles,
   Clock,
@@ -22,12 +21,19 @@ import {
   AlertCircle,
   RefreshCw,
   X,
-  Image as ImageIcon,
-  FileCheck,
   Zap,
   Repeat,
+  Edit3,
+  RotateCcw,
+  Settings2,
 } from 'lucide-react';
-import { ContactItem, QueueCampaignItem, QueueExecutionMode, QueueCampaignAttachment, DetailedReportItem } from '@/lib/types';
+import {
+  ContactItem,
+  QueueCampaignItem,
+  QueueExecutionMode,
+  QueueCampaignAttachment,
+  ErrorCategoryType,
+} from '@/lib/types';
 import {
   getStoredQueueCampaigns,
   saveStoredQueueCampaigns,
@@ -35,6 +41,7 @@ import {
   updateStoredQueueCampaign,
   deleteStoredQueueCampaign,
   moveQueueCampaign,
+  recoverInterruptedQueueCampaigns,
 } from '@/lib/queue-store';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
@@ -43,9 +50,25 @@ interface CampaignQueueManagerProps {
   onViewReport: (campaign: QueueCampaignItem) => void;
 }
 
+const DEFAULT_PAUSE_ON_ERRORS: ErrorCategoryType[] = ['SENDER_BLOCKED', 'TIMEOUT'];
+const ERROR_POLICY_OPTIONS: { category: ErrorCategoryType; label: string; description: string }[] = [
+  { category: 'SENDER_BLOCKED', label: 'Instância ou sessão parada', description: 'Desconexão, logout, bloqueio ou credencial rejeitada.' },
+  { category: 'TIMEOUT', label: 'Timeout / servidor indisponível', description: 'VPS sem resposta, conexão recusada ou falha de rede.' },
+  { category: 'NUMBER_NOT_EXISTS', label: 'Número inválido', description: 'O número não existe ou não está registrado no WhatsApp.' },
+  { category: 'USER_BLOCKED', label: 'Bloqueado pelo destinatário', description: 'O destinatário bloqueou ou recusou a mensagem.' },
+  { category: 'UNKNOWN', label: 'Erro desconhecido', description: 'Qualquer falha que não se encaixe nas categorias anteriores.' },
+];
+
+function normalizeErrorCategory(value: unknown): ErrorCategoryType {
+  return ERROR_POLICY_OPTIONS.some((option) => option.category === value)
+    ? (value as ErrorCategoryType)
+    : 'UNKNOWN';
+}
+
 export default function CampaignQueueManager({ onViewReport }: CampaignQueueManagerProps) {
   const [queue, setQueue] = useState<QueueCampaignItem[]>([]);
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+  const [editingCampaignId, setEditingCampaignId] = useState<string | null>(null);
   const [availableInstances, setAvailableInstances] = useState<{ name: string; status: string }[]>([]);
   const [loadingInstances, setLoadingInstances] = useState<boolean>(false);
 
@@ -61,10 +84,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const [enableSpintax, setEnableSpintax] = useState<boolean>(true);
   const [minDelay, setMinDelay] = useState<number>(10);
   const [maxDelay, setMaxDelay] = useState<number>(25);
+  const [pauseOnErrors, setPauseOnErrors] = useState<ErrorCategoryType[]>(DEFAULT_PAUSE_ON_ERRORS);
 
   // Active running runners map
   const activeRunnersRef = useRef<Set<string>>(new Set());
+  const runnerGenerationRef = useRef<Map<string, number>>(new Map());
   const queueIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const syncingServerRef = useRef<boolean>(false);
 
   // Load instances and queue
   const fetchInstances = async () => {
@@ -88,16 +114,58 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     }
   };
 
-  const loadQueue = () => {
-    setQueue(getStoredQueueCampaigns());
+  const loadQueue = async () => {
+    let current = getStoredQueueCampaigns();
+    if (syncingServerRef.current) {
+      setQueue(current);
+      return;
+    }
+
+    const serverCampaigns = current.filter((campaign) => campaign.id.startsWith('camp_'));
+    if (serverCampaigns.length === 0) {
+      setQueue(current);
+      return;
+    }
+
+    syncingServerRef.current = true;
+    try {
+      const results = await Promise.all(serverCampaigns.map(async (campaign) => {
+        try {
+          const response = await fetch(`/api/evolution/campaign/status?id=${encodeURIComponent(campaign.id)}`, { cache: 'no-store' });
+          const data = await response.json();
+          return data.success && data.campaign ? data.campaign : null;
+        } catch {
+          return null;
+        }
+      }));
+
+      results.forEach((serverCampaign) => {
+        if (!serverCampaign) return;
+        current = current.map((localCampaign) => localCampaign.id === serverCampaign.id
+          ? {
+              ...localCampaign,
+              ...serverCampaign,
+              executionMode: localCampaign.executionMode,
+              order: localCampaign.order,
+              createdAt: localCampaign.createdAt,
+              sentCount: serverCampaign.contacts.filter((contact: ContactItem) => contact.status === 'sent').length,
+              errorCount: serverCampaign.contacts.filter((contact: ContactItem) => contact.status === 'error').length,
+            }
+          : localCampaign);
+      });
+      saveStoredQueueCampaigns(current);
+      setQueue(current);
+    } finally {
+      syncingServerRef.current = false;
+    }
   };
 
   useEffect(() => {
-    loadQueue();
+    setQueue(recoverInterruptedQueueCampaigns());
     fetchInstances();
 
     // Auto-sync queue state every 2 seconds
-    const pollTimer = setInterval(loadQueue, 2000);
+    const pollTimer = setInterval(() => void loadQueue(), 2000);
     return () => clearInterval(pollTimer);
   }, []);
 
@@ -146,6 +214,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     if (campaignId.startsWith('camp_')) return; // Managed by server background runner
     if (activeRunnersRef.current.has(campaignId)) return;
     activeRunnersRef.current.add(campaignId);
+    const generation = (runnerGenerationRef.current.get(campaignId) || 0) + 1;
+    runnerGenerationRef.current.set(campaignId, generation);
 
     const config = getStoredConfig();
 
@@ -153,18 +223,20 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       const currentList = getStoredQueueCampaigns();
       const camp = currentList.find((c) => c.id === campaignId);
 
-      if (!camp || camp.status !== 'running') {
-        activeRunnersRef.current.delete(campaignId);
+      if (!camp || camp.status !== 'running' || runnerGenerationRef.current.get(campaignId) !== generation) {
+        if (runnerGenerationRef.current.get(campaignId) === generation) activeRunnersRef.current.delete(campaignId);
         break;
       }
 
-      // Find first pending contact
-      const pendingIndex = camp.contacts.findIndex((c) => c.status === 'pending');
+      // Somente contatos marcados e ainda pendentes entram na retomada.
+      const pendingIndex = camp.contacts.findIndex(
+        (contact) => contact.selectedForSending !== false && contact.status === 'pending'
+      );
       if (pendingIndex === -1) {
-        // All contacts processed -> Completed
         const completed = updateStoredQueueCampaign(campaignId, {
           status: 'completed',
           completedAt: new Date().toLocaleString('pt-BR'),
+          pauseReason: undefined,
         });
         setQueue(completed);
         activeRunnersRef.current.delete(campaignId);
@@ -184,11 +256,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       }
 
       // Mark contact as sending
-      camp.contacts[pendingIndex].status = 'sending';
-      updateStoredQueueCampaign(campaignId, { contacts: camp.contacts });
+      const sendingContacts = [...camp.contacts];
+      sendingContacts[pendingIndex] = { ...contact, status: 'sending', lastInstanceName: targetInstance };
+      updateStoredQueueCampaign(campaignId, { contacts: sendingContacts });
       setQueue(getStoredQueueCampaigns());
 
       const sentTimeStr = new Date().toLocaleString('pt-BR');
+      let shouldPause = false;
 
       try {
         const res = await fetch('/api/evolution/send', {
@@ -204,18 +278,26 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         });
 
         const data = await res.json();
-        const updatedContacts = [...camp.contacts];
+        const latest = getStoredQueueCampaigns().find((item) => item.id === campaignId);
+        if (!latest) break;
+        const latestIndex = latest.contacts.findIndex((item) => item.id === contact.id);
+        if (latestIndex < 0) continue;
+        const updatedContacts = [...latest.contacts];
 
         if (data.success) {
-          updatedContacts[pendingIndex] = {
+          updatedContacts[latestIndex] = {
             ...contact,
             status: 'sent',
             sentAt: sentTimeStr,
+            lastInstanceName: targetInstance,
+            attemptCount: (contact.attemptCount || 0) + 1,
+            errorCategory: undefined,
+            errorMessage: undefined,
           };
 
           // Record in detailed reports store
           addStoredReportItem({
-            id: `rep_queue_${campaignId}_${pendingIndex}`,
+            id: `rep_queue_${campaignId}_${contact.id}_${(contact.attemptCount || 0) + 1}`,
             contactName: contact.name || 'Contato',
             phone: contact.phone,
             messageSent: personalizedMsg + (camp.attachment ? ` [Anexo: ${camp.attachment.name}]` : ''),
@@ -224,58 +306,111 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             instanceName: targetInstance,
           });
 
-          const nextSentCount = (camp.sentCount || 0) + 1;
+          const nextSentCount = updatedContacts.filter((item) => item.status === 'sent').length;
           const updated = updateStoredQueueCampaign(campaignId, {
             contacts: updatedContacts,
             sentCount: nextSentCount,
+            errorCount: updatedContacts.filter((item) => item.status === 'error').length,
           });
           setQueue(updated);
         } else {
-          updatedContacts[pendingIndex] = {
+          const errorCategory = normalizeErrorCategory(data.errorCategory);
+          updatedContacts[latestIndex] = {
             ...contact,
             status: 'error',
-            errorMessage: data.error,
+            errorMessage: data.errorTitle || data.error || 'Falha no envio',
+            errorCategory,
             sentAt: sentTimeStr,
+            lastInstanceName: targetInstance,
+            attemptCount: (contact.attemptCount || 0) + 1,
           };
 
           // Record error report
           addStoredReportItem({
-            id: `rep_queue_err_${campaignId}_${pendingIndex}`,
+            id: `rep_queue_err_${campaignId}_${contact.id}_${(contact.attemptCount || 0) + 1}`,
             contactName: contact.name || 'Contato',
             phone: contact.phone,
             messageSent: personalizedMsg + (camp.attachment ? ` [Anexo: ${camp.attachment.name}]` : ''),
             status: 'error',
-            errorCategory: data.errorCategory || 'UNKNOWN',
+            errorCategory,
             errorMessage: data.error || 'Falha no envio',
             sentAt: sentTimeStr,
             instanceName: targetInstance,
           });
 
-          const nextErrCount = (camp.errorCount || 0) + 1;
+          shouldPause = (latest.errorPolicy?.pauseOn || DEFAULT_PAUSE_ON_ERRORS).includes(errorCategory);
           const updated = updateStoredQueueCampaign(campaignId, {
             contacts: updatedContacts,
-            errorCount: nextErrCount,
+            sentCount: updatedContacts.filter((item) => item.status === 'sent').length,
+            errorCount: updatedContacts.filter((item) => item.status === 'error').length,
+            status: shouldPause ? 'paused' : latest.status,
+            lastErrorCategory: errorCategory,
+            pauseReason: shouldPause
+              ? `${data.errorTitle || data.error || 'Erro configurado'}. A fila foi pausada pela política de erros.`
+              : undefined,
           });
           setQueue(updated);
         }
-      } catch (err: any) {
-        const updatedContacts = [...camp.contacts];
-        updatedContacts[pendingIndex] = {
+      } catch (error) {
+        const latest = getStoredQueueCampaigns().find((item) => item.id === campaignId);
+        if (!latest) break;
+        const latestIndex = latest.contacts.findIndex((item) => item.id === contact.id);
+        if (latestIndex < 0) continue;
+        const updatedContacts = [...latest.contacts];
+        const errorMessage = error instanceof Error ? error.message : 'Falha de rede desconhecida';
+        const errorCategory: ErrorCategoryType = 'TIMEOUT';
+        updatedContacts[latestIndex] = {
           ...contact,
           status: 'error',
-          errorMessage: err.message,
+          errorMessage,
+          errorCategory,
           sentAt: sentTimeStr,
+          lastInstanceName: targetInstance,
+          attemptCount: (contact.attemptCount || 0) + 1,
         };
+        addStoredReportItem({
+          id: `rep_queue_net_${campaignId}_${contact.id}_${updatedContacts[latestIndex].attemptCount}`,
+          contactName: contact.name || 'Contato',
+          phone: contact.phone,
+          messageSent: personalizedMsg + (camp.attachment ? ` [Anexo: ${camp.attachment.name}]` : ''),
+          status: 'error',
+          errorCategory,
+          errorMessage,
+          sentAt: sentTimeStr,
+          instanceName: targetInstance,
+        });
+        shouldPause = (latest.errorPolicy?.pauseOn || DEFAULT_PAUSE_ON_ERRORS).includes(errorCategory);
         const updated = updateStoredQueueCampaign(campaignId, {
           contacts: updatedContacts,
-          errorCount: (camp.errorCount || 0) + 1,
+          sentCount: updatedContacts.filter((item) => item.status === 'sent').length,
+          errorCount: updatedContacts.filter((item) => item.status === 'error').length,
+          status: shouldPause ? 'paused' : latest.status,
+          lastErrorCategory: errorCategory,
+          pauseReason: shouldPause ? `Falha de rede: ${errorMessage}. A fila foi pausada pela política de erros.` : undefined,
         });
         setQueue(updated);
       }
 
+      if (shouldPause) {
+        activeRunnersRef.current.delete(campaignId);
+        break;
+      }
+
       // Delay between messages
-      const delaySec = Math.floor(Math.random() * (camp.maxDelay - camp.minDelay + 1)) + camp.minDelay;
-      await new Promise((r) => setTimeout(r, delaySec * 1000));
+      const latestCampaign = getStoredQueueCampaigns().find((item) => item.id === campaignId);
+      const hasMorePending = latestCampaign?.contacts.some(
+        (item) => item.selectedForSending !== false && item.status === 'pending'
+      );
+      if (!latestCampaign || !hasMorePending) continue;
+
+      const delaySec = Math.floor(Math.random() * (latestCampaign.maxDelay - latestCampaign.minDelay + 1)) + latestCampaign.minDelay;
+      const delayEnd = Date.now() + delaySec * 1000;
+      while (Date.now() < delayEnd) {
+        if (runnerGenerationRef.current.get(campaignId) !== generation) break;
+        const liveCampaign = getStoredQueueCampaigns().find((item) => item.id === campaignId);
+        if (!liveCampaign || liveCampaign.status !== 'running') break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000, delayEnd - Date.now())));
+      }
     }
   };
 
@@ -288,18 +423,37 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
 
   // Controls with server-side campaign fallback
   const handleStartCampaign = async (id: string) => {
+    const campaign = getStoredQueueCampaigns().find((item) => item.id === id);
+    const pendingSelected = campaign?.contacts.some(
+      (contact) => contact.selectedForSending !== false && contact.status === 'pending'
+    );
+    if (!campaign || !pendingSelected) {
+      alert('Não há contatos selecionados e pendentes. Edite a fila e marque contatos para enviar ou tentar novamente.');
+      return;
+    }
+
     if (id.startsWith('camp_')) {
       try {
-        await fetch('/api/evolution/campaign/control', {
+        const response = await fetch('/api/evolution/campaign/control', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ campaignId: id, action: 'resume' }),
         });
-      } catch {}
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          alert(data.error || 'Não foi possível continuar a campanha no servidor.');
+          return;
+        }
+      } catch {
+        alert('Não foi possível comunicar com o executor da campanha.');
+        return;
+      }
     }
     const updated = updateStoredQueueCampaign(id, {
       status: 'running',
-      startedAt: new Date().toLocaleString('pt-BR'),
+      startedAt: campaign.startedAt || new Date().toLocaleString('pt-BR'),
+      completedAt: undefined,
+      pauseReason: undefined,
     });
     setQueue(updated);
     if (!id.startsWith('camp_')) {
@@ -317,7 +471,11 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         });
       } catch {}
     }
-    const updated = updateStoredQueueCampaign(id, { status: 'paused' });
+    runnerGenerationRef.current.set(id, (runnerGenerationRef.current.get(id) || 0) + 1);
+    const updated = updateStoredQueueCampaign(id, {
+      status: 'paused',
+      pauseReason: 'Pausada manualmente. Os contatos pendentes foram preservados.',
+    });
     setQueue(updated);
     activeRunnersRef.current.delete(id);
   };
@@ -332,9 +490,11 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         });
       } catch {}
     }
+    runnerGenerationRef.current.set(id, (runnerGenerationRef.current.get(id) || 0) + 1);
     const updated = updateStoredQueueCampaign(id, {
       status: 'stopped',
       completedAt: new Date().toLocaleString('pt-BR'),
+      pauseReason: 'Interrompida manualmente. Os contatos pendentes foram preservados.',
     });
     setQueue(updated);
     activeRunnersRef.current.delete(id);
@@ -353,8 +513,114 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     setQueue(updated);
   };
 
+  const openCreateCampaignModal = () => {
+    setEditingCampaignId(null);
+    setTitle('');
+    setContacts([]);
+    setManualName('');
+    setManualPhone('');
+    setMessageTemplate('Olá {nome}! Temos uma novidade imperdível para você.');
+    setAttachment(null);
+    setExecutionMode('sequential');
+    setEnableSpintax(true);
+    setMinDelay(10);
+    setMaxDelay(25);
+    setSelectedInstances(availableInstances[0]?.name ? [availableInstances[0].name] : []);
+    setPauseOnErrors([...DEFAULT_PAUSE_ON_ERRORS]);
+    setShowCreateModal(true);
+  };
+
+  const openCampaignEditor = async (campaign: QueueCampaignItem) => {
+    if (campaign.status === 'running') {
+      await handlePauseCampaign(campaign.id);
+      const timeoutAt = Date.now() + 32_000;
+      while (Date.now() < timeoutAt) {
+        await loadQueue();
+        const liveCampaign = getStoredQueueCampaigns().find((item) => item.id === campaign.id);
+        if (!liveCampaign?.contacts.some((contact) => contact.status === 'sending')) break;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    const editableCampaign = getStoredQueueCampaigns().find((item) => item.id === campaign.id) || campaign;
+    if (editableCampaign.contacts.some((contact) => contact.status === 'sending')) {
+      alert('A fila foi pausada, mas o envio atual ainda está terminando. Aguarde alguns segundos e clique em Personalizar novamente para evitar duplicidade.');
+      return;
+    }
+
+    setEditingCampaignId(editableCampaign.id);
+    setTitle(editableCampaign.title);
+    setContacts(editableCampaign.contacts.map((contact) => ({
+      ...contact,
+      status: contact.status === 'sending' ? 'pending' : contact.status,
+      selectedForSending: contact.selectedForSending !== false,
+    })));
+    setMessageTemplate(editableCampaign.messageTemplate);
+    setAttachment(editableCampaign.attachment || null);
+    setSelectedInstances([...editableCampaign.selectedInstances]);
+    setExecutionMode(editableCampaign.executionMode);
+    setEnableSpintax(editableCampaign.enableSpintax);
+    setMinDelay(editableCampaign.minDelay);
+    setMaxDelay(editableCampaign.maxDelay);
+    setPauseOnErrors([...(editableCampaign.errorPolicy?.pauseOn || DEFAULT_PAUSE_ON_ERRORS)]);
+    setShowCreateModal(true);
+  };
+
+  const closeCampaignModal = () => {
+    setShowCreateModal(false);
+    setEditingCampaignId(null);
+  };
+
+  const toggleContactSelection = (contactId: string) => {
+    setContacts((current) => current.map((contact) =>
+      contact.id === contactId
+        ? { ...contact, selectedForSending: contact.selectedForSending === false }
+        : contact
+    ));
+  };
+
+  const selectAllContacts = (selected: boolean) => {
+    setContacts((current) => current.map((contact) => ({ ...contact, selectedForSending: selected })));
+  };
+
+  const retryContact = (contactId: string) => {
+    setContacts((current) => current.map((contact) =>
+      contact.id === contactId
+        ? {
+            ...contact,
+            status: 'pending',
+            selectedForSending: true,
+            errorCategory: undefined,
+            errorMessage: undefined,
+            sentAt: undefined,
+          }
+        : contact
+    ));
+  };
+
+  const retryAllErrors = () => {
+    setContacts((current) => current.map((contact) =>
+      contact.status === 'error'
+        ? {
+            ...contact,
+            status: 'pending',
+            selectedForSending: true,
+            errorCategory: undefined,
+            errorMessage: undefined,
+            sentAt: undefined,
+          }
+        : contact
+    ));
+  };
+
+  const togglePauseOnError = (category: ErrorCategoryType) => {
+    setPauseOnErrors((current) =>
+      current.includes(category) ? current.filter((item) => item !== category) : [...current, category]
+    );
+  };
+
   // Create Campaign in Queue
-  const handleCreateQueueCampaign = (e: React.FormEvent) => {
+  const handleCreateQueueCampaign = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
       alert('Digite o título da campanha.');
@@ -362,6 +628,10 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     }
     if (contacts.length === 0) {
       alert('Adicione pelo menos 1 contato para o disparo.');
+      return;
+    }
+    if (!editingCampaignId && !contacts.some((contact) => contact.selectedForSending !== false && contact.status === 'pending')) {
+      alert('Marque pelo menos um contato pendente para este disparo.');
       return;
     }
     if (selectedInstances.length === 0) {
@@ -373,10 +643,59 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       return;
     }
 
+    const normalizedContacts = contacts.map((contact) => ({
+      ...contact,
+      selectedForSending: contact.selectedForSending !== false,
+      status: contact.status === 'sending' ? ('pending' as const) : contact.status,
+    }));
+
+    if (editingCampaignId) {
+      const currentCampaign = queue.find((campaign) => campaign.id === editingCampaignId);
+      if (!currentCampaign) return;
+      const updates = {
+        title: title.trim(),
+        contacts: normalizedContacts,
+        messageTemplate,
+        selectedInstances,
+        enableSpintax,
+        minDelay,
+        maxDelay,
+        errorPolicy: { pauseOn: pauseOnErrors },
+        attachment: attachment || null,
+      };
+
+      if (editingCampaignId.startsWith('camp_')) {
+        const response = await fetch('/api/evolution/campaign/update', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaignId: editingCampaignId, updates }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          alert(data.error || 'Não foi possível salvar as alterações no servidor.');
+          return;
+        }
+      }
+
+      const updated = updateStoredQueueCampaign(editingCampaignId, {
+        ...updates,
+        attachment: attachment || undefined,
+        executionMode,
+        status: 'paused',
+        sentCount: normalizedContacts.filter((contact) => contact.status === 'sent').length,
+        errorCount: normalizedContacts.filter((contact) => contact.status === 'error').length,
+        completedAt: undefined,
+        pauseReason: 'Campanha editada. Revise e clique em Continuar para processar os contatos pendentes selecionados.',
+      });
+      setQueue(updated);
+      closeCampaignModal();
+      return;
+    }
+
     const newCamp: QueueCampaignItem = {
       id: `queue_${Date.now()}`,
       title: title.trim(),
-      contacts,
+      contacts: normalizedContacts,
       messageTemplate,
       attachment: attachment ? attachment : undefined,
       selectedInstances,
@@ -389,11 +708,12 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       sentCount: 0,
       errorCount: 0,
       createdAt: new Date().toLocaleString('pt-BR'),
+      errorPolicy: { pauseOn: pauseOnErrors },
     };
 
     const updated = addStoredQueueCampaign(newCamp);
     setQueue(updated);
-    setShowCreateModal(false);
+    closeCampaignModal();
 
     // Reset Form
     setTitle('');
@@ -410,8 +730,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 20 * 1024 * 1024) {
-      alert('Arquivo muito grande. Máximo 20MB.');
+    if (file.size > 7.5 * 1024 * 1024) {
+      alert('Arquivo muito grande. Máximo 7,5 MB.');
       return;
     }
 
@@ -446,6 +766,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
               phone: formatPhoneNumber(String(rawPhone)),
               name: String(rawName).trim(),
               status: 'pending',
+              selectedForSending: true,
             });
           }
         });
@@ -467,6 +788,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         phone: formatPhoneNumber(manualPhone),
         name: manualName || 'Cliente',
         status: 'pending',
+        selectedForSending: true,
       },
     ]);
     setManualPhone('');
@@ -488,6 +810,12 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const runningCount = queue.filter((c) => c.status === 'running').length;
   const queuedCount = queue.filter((c) => c.status === 'queued').length;
   const completedCount = queue.filter((c) => c.status === 'completed').length;
+  const visibleInstances = [
+    ...availableInstances,
+    ...selectedInstances
+      .filter((name) => !availableInstances.some((instance) => instance.name === name))
+      .map((name) => ({ name, status: 'não consultada' })),
+  ];
 
   return (
     <div className="space-y-6">
@@ -546,7 +874,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         </div>
 
         <button
-          onClick={() => setShowCreateModal(true)}
+          onClick={openCreateCampaignModal}
           className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-500/20 flex items-center justify-center gap-2"
         >
           <Plus className="w-4 h-4" /> Criar Novo Disparo na Fila
@@ -566,8 +894,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         ) : (
           queue.map((camp, index) => {
             const totalContacts = camp.contacts.length;
-            const sent = camp.sentCount || 0;
-            const progress = totalContacts > 0 ? Math.round((sent / totalContacts) * 100) : 0;
+            const selectedContacts = camp.contacts.filter((contact) => contact.selectedForSending !== false);
+            const sent = selectedContacts.filter((contact) => contact.status === 'sent').length;
+            const failures = selectedContacts.filter((contact) => contact.status === 'error').length;
+            const pending = selectedContacts.filter((contact) => contact.status === 'pending' || contact.status === 'sending').length;
+            const excluded = totalContacts - selectedContacts.length;
+            const processed = sent + failures;
+            const progress = selectedContacts.length > 0 ? Math.round((processed / selectedContacts.length) * 100) : 0;
 
             return (
               <div
@@ -633,7 +966,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                     <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-medium flex-wrap">
                       <span>Criado em: {camp.createdAt}</span>
                       <span>&bull;</span>
-                      <span>{totalContacts} contatos</span>
+                      <span>{selectedContacts.length} selecionados de {totalContacts}</span>
                       <span>&bull;</span>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span>Instâncias:</span>
@@ -647,6 +980,19 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                         ))}
                       </div>
                     </div>
+                    <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                      Pausa automática: {(camp.errorPolicy?.pauseOn || DEFAULT_PAUSE_ON_ERRORS).length > 0
+                        ? (camp.errorPolicy?.pauseOn || DEFAULT_PAUSE_ON_ERRORS)
+                            .map((category) => ERROR_POLICY_OPTIONS.find((option) => option.category === category)?.label || category)
+                            .join(', ')
+                        : 'desativada — todos os erros serão registrados e a fila continuará'}
+                    </p>
+                    {camp.pauseReason && camp.status !== 'running' && (
+                      <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
+                        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>{camp.pauseReason}</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Actions Toolbar */}
@@ -671,13 +1017,21 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                       </button>
                     </div>
 
+                    <button
+                      onClick={() => openCampaignEditor(camp)}
+                      className="px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all flex items-center gap-1"
+                      title="Editar mensagem, contatos, instâncias e regras de erro"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" /> Personalizar
+                    </button>
+
                     {/* Play/Pause Controls */}
                     {camp.status !== 'running' && camp.status !== 'completed' && (
                       <button
                         onClick={() => handleStartCampaign(camp.id)}
                         className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1"
                       >
-                        <Play className="w-3.5 h-3.5 fill-white" /> Iniciar
+                        <Play className="w-3.5 h-3.5 fill-white" /> {camp.status === 'queued' ? 'Iniciar' : 'Continuar'}
                       </button>
                     )}
 
@@ -723,7 +1077,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                 <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800/60">
                   <div className="flex justify-between items-center text-xs font-bold">
                     <span className="text-slate-600 dark:text-slate-400">
-                      Progresso: {sent} de {totalContacts} enviados ({camp.errorCount || 0} falhas)
+                      Processados: {processed}/{selectedContacts.length} — {sent} enviados, {failures} falhas, {pending} pendentes{excluded > 0 ? `, ${excluded} fora do disparo` : ''}
                     </span>
                     <span className="text-indigo-600 dark:text-indigo-400 font-mono font-extrabold">{progress}%</span>
                   </div>
@@ -746,13 +1100,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div className="flex items-center gap-2">
-                <Plus className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                {editingCampaignId ? <Edit3 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" /> : <Plus className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
                 <h3 className="font-extrabold text-slate-900 dark:text-slate-100 text-base">
-                  Adicionar Novo Disparo na Fila
+                  {editingCampaignId ? 'Personalizar e Retomar Disparo' : 'Adicionar Novo Disparo na Fila'}
                 </h3>
               </div>
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={closeCampaignModal}
                 className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full"
               >
                 <X className="w-5 h-5" />
@@ -845,7 +1199,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                 </div>
 
                 <div className="flex flex-wrap gap-2 pt-1">
-                  {availableInstances.map((inst) => {
+                  {visibleInstances.map((inst) => {
                     const isSelected = selectedInstances.includes(inst.name);
                     return (
                       <label
@@ -949,10 +1303,39 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                 </div>
               </div>
 
+              {/* Error policy */}
+              <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/70 p-4 dark:border-amber-500/20 dark:bg-amber-500/5">
+                <div className="flex items-start gap-2">
+                  <Settings2 className="mt-0.5 h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <div>
+                    <p className="text-xs font-extrabold text-slate-800 dark:text-slate-200">Quando a fila deve parar?</p>
+                    <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">Marcado = pausa a fila. Desmarcado = registra a falha e continua para o próximo contato.</p>
+                  </div>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {ERROR_POLICY_OPTIONS.map((option) => (
+                    <label key={option.category} className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 bg-white p-2.5 dark:border-slate-800 dark:bg-slate-950">
+                      <input
+                        type="checkbox"
+                        checked={pauseOnErrors.includes(option.category)}
+                        onChange={() => togglePauseOnError(option.category)}
+                        className="mt-0.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                      />
+                      <span>
+                        <span className="block text-[11px] font-bold text-slate-800 dark:text-slate-200">{option.label}</span>
+                        <span className="block text-[9px] leading-relaxed text-slate-500 dark:text-slate-400">{option.description}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
               {/* Contacts Selection */}
               <div className="space-y-2 p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
                 <div className="flex items-center justify-between text-xs font-bold">
-                  <span className="text-slate-700 dark:text-slate-300">Contatos ({contacts.length})</span>
+                  <span className="text-slate-700 dark:text-slate-300">
+                    Contatos ({contacts.filter((contact) => contact.selectedForSending !== false).length} selecionados de {contacts.length})
+                  </span>
                   <div className="flex items-center gap-2">
                     <input
                       type="file"
@@ -993,13 +1376,55 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                     + Add
                   </button>
                 </div>
+
+                {contacts.length > 0 && (
+                  <div className="space-y-2 pt-2">
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
+                      <button type="button" onClick={() => selectAllContacts(true)} className="text-indigo-600 hover:underline dark:text-indigo-400">Marcar todos</button>
+                      <button type="button" onClick={() => selectAllContacts(false)} className="text-slate-500 hover:underline">Desmarcar todos</button>
+                      {contacts.some((contact) => contact.status === 'error') && (
+                        <button type="button" onClick={retryAllErrors} className="flex items-center gap-1 text-amber-600 hover:underline dark:text-amber-400">
+                          <RotateCcw className="h-3 w-3" /> Reenviar todas as falhas
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                      {contacts.map((contact) => (
+                        <div key={contact.id} className={`flex items-center gap-2 rounded-xl border p-2 ${contact.selectedForSending !== false ? 'border-indigo-200 bg-indigo-50/60 dark:border-indigo-500/20 dark:bg-indigo-500/5' : 'border-slate-200 bg-white opacity-60 dark:border-slate-800 dark:bg-slate-900'}`}>
+                          <input
+                            type="checkbox"
+                            checked={contact.selectedForSending !== false}
+                            onChange={() => toggleContactSelection(contact.id)}
+                            className="rounded border-slate-300 text-indigo-600"
+                            title="Incluir este contato no disparo"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[11px] font-bold text-slate-800 dark:text-slate-200">{contact.name || 'Contato'}</p>
+                            <p className="truncate font-mono text-[9px] text-slate-500">{contact.phone}</p>
+                          </div>
+                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${contact.status === 'sent' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : contact.status === 'error' ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
+                            {contact.status === 'sent' ? 'Enviado' : contact.status === 'error' ? 'Falha' : contact.status === 'sending' ? 'Enviando' : 'Pendente'}
+                          </span>
+                          {(contact.status === 'error' || contact.status === 'sent') && (
+                            <button type="button" onClick={() => retryContact(contact.id)} className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-100 dark:text-amber-400 dark:hover:bg-amber-500/10" title="Marcar este contato para reenviar">
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          <button type="button" onClick={() => setContacts((current) => current.filter((item) => item.id !== contact.id))} className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-100 hover:text-rose-600 dark:hover:bg-rose-500/10" title="Remover contato desta fila">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Submit Buttons */}
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setShowCreateModal(false)}
+                  onClick={closeCampaignModal}
                   className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 text-xs font-bold"
                 >
                   Cancelar
@@ -1008,7 +1433,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                   type="submit"
                   className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md shadow-indigo-500/25 flex items-center gap-1.5"
                 >
-                  <Plus className="w-4 h-4" /> Adicionar à Fila
+                  {editingCampaignId ? <Edit3 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                  {editingCampaignId ? 'Salvar Personalização' : 'Adicionar à Fila'}
                 </button>
               </div>
             </form>

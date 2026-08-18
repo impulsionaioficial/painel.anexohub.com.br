@@ -28,7 +28,7 @@ const STORAGE_EMAIL_LOGS_KEY = 'awp_email_logs_history';
 function getStoredEmailTasks(): EmailScheduledTask[] {
   if (typeof window === 'undefined') return [];
   try {
-    const saved = localStorage.getItem(STORAGE_EMAIL_TASKS_KEY);
+    const saved = sessionStorage.getItem(STORAGE_EMAIL_TASKS_KEY);
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -37,13 +37,13 @@ function getStoredEmailTasks(): EmailScheduledTask[] {
 
 function saveStoredEmailTasks(tasks: EmailScheduledTask[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_EMAIL_TASKS_KEY, JSON.stringify(tasks));
+  sessionStorage.setItem(STORAGE_EMAIL_TASKS_KEY, JSON.stringify(tasks));
 }
 
 function getStoredEmailLogs(): LogEntry[] {
   if (typeof window === 'undefined') return [];
   try {
-    const saved = localStorage.getItem(STORAGE_EMAIL_LOGS_KEY);
+    const saved = sessionStorage.getItem(STORAGE_EMAIL_LOGS_KEY);
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -52,7 +52,7 @@ function getStoredEmailLogs(): LogEntry[] {
 
 function saveStoredEmailLogs(logs: LogEntry[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(STORAGE_EMAIL_LOGS_KEY, JSON.stringify(logs.slice(0, 200)));
+  sessionStorage.setItem(STORAGE_EMAIL_LOGS_KEY, JSON.stringify(logs.slice(0, 200)));
 }
 
 export default function DisparadorEmailPage() {
