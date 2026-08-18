@@ -45,6 +45,8 @@ import {
 } from '@/lib/queue-store';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
+import { describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
+import ContactImportReview from '@/components/ContactImportReview';
 
 interface CampaignQueueManagerProps {
   onViewReport: (campaign: QueueCampaignItem) => void;
@@ -78,6 +80,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [manualPhone, setManualPhone] = useState<string>('');
   const [manualName, setManualName] = useState<string>('');
+  const [contactImportSummary, setContactImportSummary] = useState<string>('');
   const [messageTemplate, setMessageTemplate] = useState<string>('Olá {nome}! Temos uma novidade imperdível para você.');
   const [attachment, setAttachment] = useState<QueueCampaignAttachment | null>(null);
   const [executionMode, setExecutionMode] = useState<QueueExecutionMode>('sequential');
@@ -517,6 +520,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     setEditingCampaignId(null);
     setTitle('');
     setContacts([]);
+    setContactImportSummary('');
     setManualName('');
     setManualPhone('');
     setMessageTemplate('Olá {nome}! Temos uma novidade imperdível para você.');
@@ -555,6 +559,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       status: contact.status === 'sending' ? 'pending' : contact.status,
       selectedForSending: contact.selectedForSending !== false,
     })));
+    setContactImportSummary('');
     setMessageTemplate(editableCampaign.messageTemplate);
     setAttachment(editableCampaign.attachment || null);
     setSelectedInstances([...editableCampaign.selectedInstances]);
@@ -569,18 +574,6 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const closeCampaignModal = () => {
     setShowCreateModal(false);
     setEditingCampaignId(null);
-  };
-
-  const toggleContactSelection = (contactId: string) => {
-    setContacts((current) => current.map((contact) =>
-      contact.id === contactId
-        ? { ...contact, selectedForSending: contact.selectedForSending === false }
-        : contact
-    ));
-  };
-
-  const selectAllContacts = (selected: boolean) => {
-    setContacts((current) => current.map((contact) => ({ ...contact, selectedForSending: selected })));
   };
 
   const retryContact = (contactId: string) => {
@@ -718,6 +711,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     // Reset Form
     setTitle('');
     setContacts([]);
+    setContactImportSummary('');
     setAttachment(null);
 
     if (newCamp.status === 'running') {
@@ -751,6 +745,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const input = e.currentTarget;
 
     Papa.parse(file, {
       header: true,
@@ -771,9 +766,17 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
           }
         });
         if (imported.length > 0) {
-          setContacts((prev) => [...prev, ...imported]);
-          alert(`${imported.length} contatos adicionados à campanha!`);
+          const result = mergeImportedContacts(contacts, imported);
+          setContacts(result.contacts);
+          setContactImportSummary(`${file.name} • ${describeContactImport(result)}`);
+        } else {
+          setContactImportSummary('Nenhum número válido foi encontrado no arquivo.');
         }
+        input.value = '';
+      },
+      error: () => {
+        input.value = '';
+        setContactImportSummary('Não foi possível ler esse arquivo CSV.');
       },
     });
   };
@@ -781,16 +784,17 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const handleAddManual = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualPhone) return;
-    setContacts((prev) => [
-      ...prev,
-      {
-        id: `q_man_${Date.now()}`,
-        phone: formatPhoneNumber(manualPhone),
-        name: manualName || 'Cliente',
-        status: 'pending',
-        selectedForSending: true,
-      },
-    ]);
+    const result = mergeImportedContacts(contacts, [{
+      id: `q_man_${Date.now()}`,
+      phone: formatPhoneNumber(manualPhone),
+      name: manualName || 'Cliente',
+      status: 'pending',
+      selectedForSending: true,
+    }]);
+    setContacts(result.contacts);
+    setContactImportSummary(result.addedCount > 0
+      ? 'Contato adicionado manualmente.'
+      : 'Esse número já estava na fila e não foi duplicado.');
     setManualPhone('');
     setManualName('');
   };
@@ -1377,47 +1381,20 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                   </button>
                 </div>
 
-                {contacts.length > 0 && (
-                  <div className="space-y-2 pt-2">
-                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold">
-                      <button type="button" onClick={() => selectAllContacts(true)} className="text-indigo-600 hover:underline dark:text-indigo-400">Marcar todos</button>
-                      <button type="button" onClick={() => selectAllContacts(false)} className="text-slate-500 hover:underline">Desmarcar todos</button>
-                      {contacts.some((contact) => contact.status === 'error') && (
-                        <button type="button" onClick={retryAllErrors} className="flex items-center gap-1 text-amber-600 hover:underline dark:text-amber-400">
-                          <RotateCcw className="h-3 w-3" /> Reenviar todas as falhas
-                        </button>
-                      )}
-                    </div>
-                    <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
-                      {contacts.map((contact) => (
-                        <div key={contact.id} className={`flex items-center gap-2 rounded-xl border p-2 ${contact.selectedForSending !== false ? 'border-indigo-200 bg-indigo-50/60 dark:border-indigo-500/20 dark:bg-indigo-500/5' : 'border-slate-200 bg-white opacity-60 dark:border-slate-800 dark:bg-slate-900'}`}>
-                          <input
-                            type="checkbox"
-                            checked={contact.selectedForSending !== false}
-                            onChange={() => toggleContactSelection(contact.id)}
-                            className="rounded border-slate-300 text-indigo-600"
-                            title="Incluir este contato no disparo"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-[11px] font-bold text-slate-800 dark:text-slate-200">{contact.name || 'Contato'}</p>
-                            <p className="truncate font-mono text-[9px] text-slate-500">{contact.phone}</p>
-                          </div>
-                          <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${contact.status === 'sent' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : contact.status === 'error' ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
-                            {contact.status === 'sent' ? 'Enviado' : contact.status === 'error' ? 'Falha' : contact.status === 'sending' ? 'Enviando' : 'Pendente'}
-                          </span>
-                          {(contact.status === 'error' || contact.status === 'sent') && (
-                            <button type="button" onClick={() => retryContact(contact.id)} className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-100 dark:text-amber-400 dark:hover:bg-amber-500/10" title="Marcar este contato para reenviar">
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                          <button type="button" onClick={() => setContacts((current) => current.filter((item) => item.id !== contact.id))} className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-100 hover:text-rose-600 dark:hover:bg-rose-500/10" title="Remover contato desta fila">
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {contacts.some((contact) => contact.status === 'error') && (
+                  <button type="button" onClick={retryAllErrors} className="flex items-center gap-1 text-[10px] font-bold text-amber-600 hover:underline dark:text-amber-400">
+                    <RotateCcw className="h-3 w-3" /> Marcar todas as falhas para reenvio
+                  </button>
                 )}
+
+                <ContactImportReview
+                  contacts={contacts}
+                  onChange={setContacts}
+                  importSummary={contactImportSummary}
+                  onDismissSummary={() => setContactImportSummary('')}
+                  onRetryContact={retryContact}
+                  maxHeightClassName="max-h-72"
+                />
               </div>
 
               {/* Submit Buttons */}

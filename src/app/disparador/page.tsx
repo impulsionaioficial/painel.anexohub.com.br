@@ -11,7 +11,9 @@ import ReportTable from '@/components/ReportTable';
 import CampaignQueueManager from '@/components/CampaignQueueManager';
 import ScheduleManager from '@/components/ScheduleManager';
 import ChatViewer from '@/components/ChatViewer';
+import ContactImportReview from '@/components/ContactImportReview';
 import { getActiveUser, hasPermission } from '@/lib/auth-store';
+import { describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
 
 interface AttachmentFile {
   name: string;
@@ -32,6 +34,7 @@ export default function DisparadorPage() {
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [manualPhone, setManualPhone] = useState<string>('');
   const [manualName, setManualName] = useState<string>('');
+  const [contactImportSummary, setContactImportSummary] = useState<string>('');
   const [messageTemplate, setMessageTemplate] = useState<string>('Olá {nome}! Temos uma oferta especial para você hoje. Qualquer dúvida nos chame aqui!');
   const [attachment, setAttachment] = useState<AttachmentFile | null>(null);
 
@@ -96,7 +99,9 @@ export default function DisparadorPage() {
         try {
           const parsed = JSON.parse(imported);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setContacts(parsed);
+            const result = mergeImportedContacts([], parsed);
+            setContacts(result.contacts);
+            setContactImportSummary(`Recebidos do extrator • ${describeContactImport(result)}`);
           }
         } catch {}
         sessionStorage.removeItem('awp_imported_contacts');
@@ -218,6 +223,7 @@ export default function DisparadorPage() {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const input = e.currentTarget;
 
     Papa.parse(file, {
       header: true,
@@ -233,18 +239,24 @@ export default function DisparadorPage() {
               phone: formatPhoneNumber(String(rawPhone)),
               name: String(rawName).trim(),
               status: 'pending',
+              selectedForSending: true,
             });
           }
         });
 
         if (imported.length > 0) {
-          setContacts((prev) => [...prev, ...imported]);
-          alert(`${imported.length} contatos importados com sucesso!`);
+          const result = mergeImportedContacts(contacts, imported);
+          setContacts(result.contacts);
+          setContactImportSummary(`${file.name} • ${describeContactImport(result)}`);
         } else {
           alert('Nenhum número de telefone válido encontrado no arquivo CSV.');
         }
+        input.value = '';
       },
-      error: () => alert('Erro ao ler arquivo CSV'),
+      error: () => {
+        input.value = '';
+        alert('Erro ao ler arquivo CSV');
+      },
     });
   };
 
@@ -258,20 +270,22 @@ export default function DisparadorPage() {
       phone: formatted,
       name: manualName || 'Cliente',
       status: 'pending',
+      selectedForSending: true,
     };
 
-    setContacts((prev) => [...prev, newContact]);
+    const result = mergeImportedContacts(contacts, [newContact]);
+    setContacts(result.contacts);
+    setContactImportSummary(result.addedCount > 0
+      ? 'Contato adicionado manualmente.'
+      : 'Esse número já estava na lista e não foi duplicado.');
     setManualPhone('');
     setManualName('');
-  };
-
-  const removeContact = (id: string) => {
-    setContacts((prev) => prev.filter((c) => c.id !== id));
   };
 
   const clearContacts = () => {
     if (confirm('Deseja limpar todos os contatos da lista?')) {
       setContacts([]);
+      setContactImportSummary('');
     }
   };
 
@@ -283,8 +297,8 @@ export default function DisparadorPage() {
       return;
     }
 
-    if (contacts.length === 0) {
-      alert('Adicione pelo menos um contato para iniciar.');
+    if (!contacts.some((contact) => contact.selectedForSending !== false && contact.status === 'pending')) {
+      alert('Marque pelo menos um contato pendente para iniciar.');
       return;
     }
     if (!messageTemplate.trim() && !attachment) {
@@ -379,7 +393,9 @@ export default function DisparadorPage() {
     }
   };
 
-  const progressPercent = contacts.length > 0 ? Math.round((sentCount / contacts.length) * 100) : 0;
+  const selectedContactCount = contacts.filter((contact) => contact.selectedForSending !== false).length;
+  const progressTotal = Math.max(selectedContactCount, sentCount);
+  const progressPercent = progressTotal > 0 ? Math.round((sentCount / progressTotal) * 100) : 0;
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -501,10 +517,10 @@ export default function DisparadorPage() {
               {campaignStatus !== 'running' ? (
                 <button
                   onClick={startCampaign}
-                  disabled={contacts.length === 0}
+                  disabled={selectedContactCount === 0}
                   className="px-6 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all shadow-md shadow-indigo-500/25 disabled:opacity-50 flex items-center gap-2"
                 >
-                  <Play className="w-4 h-4 fill-white" /> Iniciar Disparos ({selectedInstances.length} Instâncias)
+                  <Play className="w-4 h-4 fill-white" /> Iniciar {selectedContactCount} Disparo{selectedContactCount === 1 ? '' : 's'} ({selectedInstances.length} Instâncias)
                 </button>
               ) : (
                 <button
@@ -572,7 +588,7 @@ export default function DisparadorPage() {
           {contacts.length > 0 && (
             <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 space-y-2 shadow-sm">
               <div className="flex justify-between text-xs text-slate-700 dark:text-slate-300 font-bold">
-                <span>Progresso no Servidor ({sentCount} de {contacts.length} enviados)</span>
+                <span>Progresso no Servidor ({sentCount} de {progressTotal} selecionados)</span>
                 <span className="text-indigo-600 dark:text-indigo-400 font-extrabold">{progressPercent}%</span>
               </div>
               <div className="w-full h-3.5 rounded-full bg-slate-100 dark:bg-slate-950 overflow-hidden border border-slate-200 dark:border-slate-800">
@@ -751,9 +767,9 @@ export default function DisparadorPage() {
             {/* Right Column: Contacts List & Realtime Logs (5 cols) */}
             <div className="lg:col-span-5 space-y-6">
               <div className="p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800/80 space-y-4 shadow-sm transition-colors">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <h3 className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                    Lista de Envio ({contacts.length})
+                    Revisão dos Contatos
                   </h3>
                   {contacts.length > 0 && (
                     <button
@@ -765,52 +781,13 @@ export default function DisparadorPage() {
                   )}
                 </div>
 
-                <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
-                  {contacts.length === 0 ? (
-                    <div className="text-center py-10 text-slate-400 dark:text-slate-500 text-xs font-medium">
-                      Nenhum contato adicionado ainda.
-                    </div>
-                  ) : (
-                    contacts.map((c) => (
-                      <div
-                        key={c.id}
-                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800/80 flex items-center justify-between text-xs shadow-sm"
-                      >
-                        <div>
-                          <p className="font-bold text-slate-800 dark:text-slate-200">{c.name || 'Sem nome'}</p>
-                          <p className="font-mono text-slate-500 dark:text-slate-400 text-[11px]">{c.phone}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                              c.status === 'sent'
-                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                                : c.status === 'error'
-                                ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                                : c.status === 'sending'
-                                ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 animate-pulse'
-                                : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                            }`}
-                          >
-                            {c.status === 'sent'
-                              ? 'Enviado'
-                              : c.status === 'error'
-                              ? 'Erro'
-                              : c.status === 'sending'
-                              ? 'Enviando...'
-                              : 'Pendente'}
-                          </span>
-                          <button
-                            onClick={() => removeContact(c.id)}
-                            className="text-slate-400 hover:text-rose-500 p-1 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+                <ContactImportReview
+                  contacts={contacts}
+                  onChange={setContacts}
+                  importSummary={contactImportSummary}
+                  onDismissSummary={() => setContactImportSummary('')}
+                  disabled={campaignStatus === 'running'}
+                />
               </div>
 
               {/* Console Logs */}

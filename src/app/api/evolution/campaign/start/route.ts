@@ -18,6 +18,9 @@ export async function POST(request: Request) {
     if (contacts.length > 1_000) {
       return NextResponse.json({ success: false, error: 'Limite de 1.000 contatos por campanha.' }, { status: 400 });
     }
+    if (!contacts.some((contact) => contact && contact.selectedForSending !== false && contact.status !== 'sent')) {
+      return NextResponse.json({ success: false, error: 'Marque pelo menos um contato pendente para disparar.' }, { status: 400 });
+    }
     if (typeof messageTemplate !== 'string' || messageTemplate.length > 20_000) {
       return NextResponse.json({ success: false, error: 'Mensagem inválida ou acima de 20.000 caracteres.' }, { status: 400 });
     }
