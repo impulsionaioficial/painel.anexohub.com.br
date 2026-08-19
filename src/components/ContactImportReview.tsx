@@ -202,6 +202,12 @@ export default function ContactImportReview({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] font-bold text-slate-800 dark:text-slate-200">{contact.name || 'Sem nome'}</p>
                 <p className="truncate font-mono text-[10px] text-slate-500">{contact.phone}</p>
+                {contact.errorMessage && (
+                  <p className="mt-0.5 line-clamp-2 text-[9px] font-medium text-rose-600 dark:text-rose-400">{contact.errorMessage}</p>
+                )}
+                {typeof contact.nextMessagePart === 'number' && contact.nextMessagePart > 0 && (
+                  <p className="mt-0.5 text-[9px] font-bold text-amber-600 dark:text-amber-400">Retomará na mensagem {contact.nextMessagePart + 1}</p>
+                )}
               </div>
               <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${contact.status === 'sent' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : contact.status === 'error' ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300' : contact.status === 'sending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
                 {STATUS_LABEL[contact.status]}

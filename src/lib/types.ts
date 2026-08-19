@@ -33,6 +33,14 @@ export interface ContactItem {
   selectedForSending?: boolean;
   lastInstanceName?: string;
   attemptCount?: number;
+  /** Próximo trecho /n ainda não enviado, usado para retomar sem duplicar mensagens anteriores. */
+  nextMessagePart?: number;
+}
+
+export interface TypingSimulationConfig {
+  enabled: boolean;
+  minDelayMs: number;
+  maxDelayMs: number;
 }
 
 export interface CampaignData {
@@ -90,6 +98,7 @@ export interface QueueCampaignItem {
   title: string;
   contacts: ContactItem[];
   messageTemplate: string;
+  typingSimulation?: TypingSimulationConfig;
   attachment?: QueueCampaignAttachment;
   selectedInstances: string[];
   enableSpintax: boolean;

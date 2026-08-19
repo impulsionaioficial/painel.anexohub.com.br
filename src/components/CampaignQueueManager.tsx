@@ -33,6 +33,7 @@ import {
   QueueExecutionMode,
   QueueCampaignAttachment,
   ErrorCategoryType,
+  TypingSimulationConfig,
 } from '@/lib/types';
 import {
   getStoredQueueCampaigns,
@@ -47,6 +48,8 @@ import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolutio
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
 import { describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
 import ContactImportReview from '@/components/ContactImportReview';
+import MessageSequenceControls from '@/components/MessageSequenceControls';
+import { DEFAULT_TYPING_SIMULATION, MAX_MESSAGE_PARTS, splitMessageSequence } from '@/lib/message-sequence';
 
 interface CampaignQueueManagerProps {
   onViewReport: (campaign: QueueCampaignItem) => void;
@@ -82,6 +85,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const [manualName, setManualName] = useState<string>('');
   const [contactImportSummary, setContactImportSummary] = useState<string>('');
   const [messageTemplate, setMessageTemplate] = useState<string>('Olá {nome}! Temos uma novidade imperdível para você.');
+  const [typingSimulation, setTypingSimulation] = useState<TypingSimulationConfig>({ ...DEFAULT_TYPING_SIMULATION });
   const [attachment, setAttachment] = useState<QueueCampaignAttachment | null>(null);
   const [executionMode, setExecutionMode] = useState<QueueExecutionMode>('sequential');
   const [enableSpintax, setEnableSpintax] = useState<boolean>(true);
@@ -277,6 +281,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             phone: contact.phone,
             message: personalizedMsg,
             attachment: camp.attachment ? camp.attachment : undefined,
+            typingSimulation: camp.typingSimulation,
+            startMessagePart: contact.nextMessagePart,
           }),
         });
 
@@ -296,6 +302,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             attemptCount: (contact.attemptCount || 0) + 1,
             errorCategory: undefined,
             errorMessage: undefined,
+            nextMessagePart: undefined,
           };
 
           // Record in detailed reports store
@@ -321,11 +328,14 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
           updatedContacts[latestIndex] = {
             ...contact,
             status: 'error',
-            errorMessage: data.errorTitle || data.error || 'Falha no envio',
+            errorMessage: data.sentParts
+              ? `${data.errorTitle || data.error || 'Falha no envio'} (${data.sentParts} mensagem(ns) já enviada(s))`
+              : data.errorTitle || data.error || 'Falha no envio',
             errorCategory,
             sentAt: sentTimeStr,
             lastInstanceName: targetInstance,
             attemptCount: (contact.attemptCount || 0) + 1,
+            nextMessagePart: Number.isInteger(data.nextMessagePart) ? data.nextMessagePart : contact.nextMessagePart,
           };
 
           // Record error report
@@ -524,6 +534,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     setManualName('');
     setManualPhone('');
     setMessageTemplate('Olá {nome}! Temos uma novidade imperdível para você.');
+    setTypingSimulation({ ...DEFAULT_TYPING_SIMULATION });
     setAttachment(null);
     setExecutionMode('sequential');
     setEnableSpintax(true);
@@ -561,6 +572,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     })));
     setContactImportSummary('');
     setMessageTemplate(editableCampaign.messageTemplate);
+    setTypingSimulation(editableCampaign.typingSimulation || { ...DEFAULT_TYPING_SIMULATION });
     setAttachment(editableCampaign.attachment || null);
     setSelectedInstances([...editableCampaign.selectedInstances]);
     setExecutionMode(editableCampaign.executionMode);
@@ -631,8 +643,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       alert('Selecione pelo menos 1 instância para o disparo.');
       return;
     }
-    if (!messageTemplate.trim() && !attachment) {
+    const messageParts = splitMessageSequence(messageTemplate);
+    if (messageParts.length === 0 && !attachment) {
       alert('Digite uma mensagem ou anexe um arquivo.');
+      return;
+    }
+    if (messageParts.length > MAX_MESSAGE_PARTS) {
+      alert(`Use no máximo ${MAX_MESSAGE_PARTS} mensagens por contato.`);
       return;
     }
 
@@ -649,6 +666,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         title: title.trim(),
         contacts: normalizedContacts,
         messageTemplate,
+        typingSimulation,
         selectedInstances,
         enableSpintax,
         minDelay,
@@ -690,6 +708,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       title: title.trim(),
       contacts: normalizedContacts,
       messageTemplate,
+      typingSimulation,
       attachment: attachment ? attachment : undefined,
       selectedInstances,
       enableSpintax,
@@ -905,6 +924,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             const excluded = totalContacts - selectedContacts.length;
             const processed = sent + failures;
             const progress = selectedContacts.length > 0 ? Math.round((processed / selectedContacts.length) * 100) : 0;
+            const messagePartCount = Math.max(1, splitMessageSequence(camp.messageTemplate).length);
 
             return (
               <div
@@ -971,6 +991,10 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                       <span>Criado em: {camp.createdAt}</span>
                       <span>&bull;</span>
                       <span>{selectedContacts.length} selecionados de {totalContacts}</span>
+                      <span>&bull;</span>
+                      <span>{messagePartCount} mensagem{messagePartCount === 1 ? '' : 's'} por contato</span>
+                      <span>&bull;</span>
+                      <span>{camp.typingSimulation?.enabled === false ? 'Digitação simulada desativada' : '⌨️ Digitação simulada'}</span>
                       <span>&bull;</span>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span>Instâncias:</span>
@@ -1240,6 +1264,11 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                   onChange={(e) => setMessageTemplate(e.target.value)}
                   placeholder="Digite o texto do disparo..."
                   className="w-full p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 text-xs focus:outline-none focus:border-indigo-500 shadow-sm resize-none"
+                />
+                <MessageSequenceControls
+                  message={messageTemplate}
+                  value={typingSimulation}
+                  onChange={setTypingSimulation}
                 />
               </div>
 

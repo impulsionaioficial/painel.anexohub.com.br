@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Papa from 'papaparse';
 import { Send, Upload, Plus, Trash2, Play, Pause, Sparkles, Clock, FileText, Info, Calendar, BarChart3, Paperclip, X, Image as ImageIcon, FileCheck, Layers, StopCircle, RefreshCw, MessageSquare, ListOrdered } from 'lucide-react';
-import { ContactItem, LogEntry, DetailedReportItem, QueueCampaignItem } from '@/lib/types';
+import { ContactItem, LogEntry, DetailedReportItem, QueueCampaignItem, TypingSimulationConfig } from '@/lib/types';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
 import { addStoredQueueCampaign, updateStoredQueueCampaign } from '@/lib/queue-store';
@@ -12,8 +12,10 @@ import CampaignQueueManager from '@/components/CampaignQueueManager';
 import ScheduleManager from '@/components/ScheduleManager';
 import ChatViewer from '@/components/ChatViewer';
 import ContactImportReview from '@/components/ContactImportReview';
+import MessageSequenceControls from '@/components/MessageSequenceControls';
 import { getActiveUser, hasPermission } from '@/lib/auth-store';
 import { describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
+import { DEFAULT_TYPING_SIMULATION, MAX_MESSAGE_PARTS, splitMessageSequence } from '@/lib/message-sequence';
 
 interface AttachmentFile {
   name: string;
@@ -36,6 +38,7 @@ export default function DisparadorPage() {
   const [manualName, setManualName] = useState<string>('');
   const [contactImportSummary, setContactImportSummary] = useState<string>('');
   const [messageTemplate, setMessageTemplate] = useState<string>('Olá {nome}! Temos uma oferta especial para você hoje. Qualquer dúvida nos chame aqui!');
+  const [typingSimulation, setTypingSimulation] = useState<TypingSimulationConfig>({ ...DEFAULT_TYPING_SIMULATION });
   const [attachment, setAttachment] = useState<AttachmentFile | null>(null);
 
   // Multi-Instance Rotation State
@@ -132,6 +135,7 @@ export default function DisparadorPage() {
             title: camp.title || `Disparo Instantâneo (${camp.startedAt || new Date().toLocaleTimeString('pt-BR')})`,
             contacts: camp.contacts,
             messageTemplate: camp.messageTemplate || '',
+            typingSimulation: camp.typingSimulation || typingSimulation,
             attachment: camp.attachment,
             selectedInstances: camp.selectedInstances || selectedInstances,
             enableSpintax: Boolean(camp.enableSpintax),
@@ -301,8 +305,13 @@ export default function DisparadorPage() {
       alert('Marque pelo menos um contato pendente para iniciar.');
       return;
     }
-    if (!messageTemplate.trim() && !attachment) {
+    const messageParts = splitMessageSequence(messageTemplate);
+    if (messageParts.length === 0 && !attachment) {
       alert('Digite uma mensagem ou anexe um arquivo.');
+      return;
+    }
+    if (messageParts.length > MAX_MESSAGE_PARTS) {
+      alert(`Use no máximo ${MAX_MESSAGE_PARTS} mensagens por contato.`);
       return;
     }
     if (selectedInstances.length === 0) {
@@ -326,6 +335,7 @@ export default function DisparadorPage() {
           apiKey: config.apiKey,
           selectedInstances,
           attachment: attachment ? attachment : undefined,
+          typingSimulation,
           errorPolicy: { pauseOn: ['SENDER_BLOCKED', 'TIMEOUT'] },
         }),
       });
@@ -342,6 +352,7 @@ export default function DisparadorPage() {
           title: `Disparo Instantâneo (${new Date().toLocaleTimeString('pt-BR')})`,
           contacts: contacts.map((c) => ({ ...c })),
           messageTemplate,
+          typingSimulation,
           attachment: attachment ? attachment : undefined,
           selectedInstances,
           enableSpintax,
@@ -619,6 +630,12 @@ export default function DisparadorPage() {
                   rows={5}
                   placeholder="Digite a mensagem ou legenda do anexo aqui..."
                   className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 text-sm focus:outline-none focus:border-indigo-500 resize-none font-sans shadow-sm"
+                />
+
+                <MessageSequenceControls
+                  message={messageTemplate}
+                  value={typingSimulation}
+                  onChange={setTypingSimulation}
                 />
 
                 {/* Attachment Section */}

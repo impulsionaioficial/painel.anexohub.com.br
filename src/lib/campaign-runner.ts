@@ -1,6 +1,8 @@
-import { ContactItem, ErrorCategoryType, DetailedReportItem, QueueErrorPolicy } from './types';
+import { ContactItem, ErrorCategoryType, DetailedReportItem, QueueErrorPolicy, TypingSimulationConfig } from './types';
 import { parseSpintax } from './evolution-store';
 import { dispatchWebhookEvent } from './webhook-dispatcher';
+import { EvolutionMessageSequenceError, sendEvolutionMessageSequence } from './evolution-message-sequence';
+import { normalizeTypingSimulation, splitMessageSequence } from './message-sequence';
 
 export interface BackgroundCampaign {
   id: string;
@@ -10,6 +12,7 @@ export interface BackgroundCampaign {
   /** Contador de tentativas usado somente para distribuir instâncias. */
   currentIndex: number;
   messageTemplate: string;
+  typingSimulation: TypingSimulationConfig;
   attachment?: { name: string; base64: string; mimetype: string; sizeKb: number };
   enableSpintax: boolean;
   minDelay: number;
@@ -29,6 +32,7 @@ export interface CampaignEditableFields {
   title?: string;
   contacts?: ContactItem[];
   messageTemplate?: string;
+  typingSimulation?: TypingSimulationConfig;
   selectedInstances?: string[];
   enableSpintax?: boolean;
   minDelay?: number;
@@ -137,6 +141,7 @@ export function updateBackgroundCampaign(
 
   if (typeof updates.title === 'string' && updates.title.trim()) campaign.title = updates.title.trim().slice(0, 160);
   if (typeof updates.messageTemplate === 'string') campaign.messageTemplate = updates.messageTemplate.slice(0, 20_000);
+  if (updates.typingSimulation) campaign.typingSimulation = normalizeTypingSimulation(updates.typingSimulation);
   if (typeof updates.enableSpintax === 'boolean') campaign.enableSpintax = updates.enableSpintax;
   if (Number.isFinite(updates.minDelay)) campaign.minDelay = Math.max(2, Math.min(3_600, Number(updates.minDelay)));
   if (Number.isFinite(updates.maxDelay)) campaign.maxDelay = Math.max(campaign.minDelay, Math.min(3_600, Number(updates.maxDelay)));
@@ -174,7 +179,8 @@ export function startBackgroundCampaign(
   selectedInstances: string[],
   evolutionConfig: { baseUrl: string; apiKey: string },
   attachment?: { name: string; base64: string; mimetype: string; sizeKb: number },
-  errorPolicy?: QueueErrorPolicy
+  errorPolicy?: QueueErrorPolicy,
+  typingSimulation?: TypingSimulationConfig
 ): BackgroundCampaign {
   const campaignId = `camp_${Date.now()}`;
   const validInstances = selectedInstances.length > 0 ? selectedInstances : ['instancia_default'];
@@ -185,6 +191,7 @@ export function startBackgroundCampaign(
     contacts: contacts.map((contact) => ({ ...normalizeContact(contact), status: 'pending' })),
     currentIndex: 0,
     messageTemplate,
+    typingSimulation: normalizeTypingSimulation(typingSimulation),
     attachment,
     enableSpintax,
     minDelay,
@@ -217,7 +224,8 @@ function addErrorResult(
   category: ErrorCategoryType,
   title: string,
   detail: string,
-  sentAt: string
+  sentAt: string,
+  nextMessagePart?: number
 ): void {
   const attempts = (contact.attemptCount || 0) + 1;
   campaign.contacts[contactIndex] = {
@@ -228,6 +236,7 @@ function addErrorResult(
     sentAt,
     lastInstanceName: instanceName,
     attemptCount: attempts,
+    nextMessagePart,
   };
   campaign.lastErrorCategory = category;
   void dispatchWebhookEvent('whatsapp.message.error', {
@@ -316,44 +325,26 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
       if (!baseUrl || !apiKey || baseUrl.includes('exemplo.com')) {
         await new Promise((resolve) => setTimeout(resolve, 600));
       } else {
-        const cleanBaseUrl = baseUrl.replace(/\/$/, '');
-        const isAttachment = Boolean(campaign.attachment?.base64);
-        const endpoint = isAttachment ? 'sendMedia' : 'sendText';
-        const body = isAttachment
-          ? {
-              number: cleanPhone,
-              mediatype: campaign.attachment!.mimetype?.startsWith('image/') ? 'image'
-                : campaign.attachment!.mimetype?.startsWith('audio/') ? 'audio'
-                : campaign.attachment!.mimetype?.startsWith('video/') ? 'video' : 'document',
-              mimetype: campaign.attachment!.mimetype,
-              caption: personalizedMsg,
-              media: campaign.attachment!.base64.includes(',') ? campaign.attachment!.base64.split(',')[1] : campaign.attachment!.base64,
-              fileName: campaign.attachment!.name,
-              options: { delay: 1200 },
-            }
-          : { number: cleanPhone, text: personalizedMsg, options: { delay: 1200 } };
-        const response = await fetch(`${cleanBaseUrl}/message/${endpoint}/${currentInstance}`, {
-          method: 'POST',
-          headers: { apikey: apiKey, 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(30_000),
+        await sendEvolutionMessageSequence({
+          baseUrl,
+          apiKey,
+          instanceName: currentInstance,
+          recipient: cleanPhone,
+          message: personalizedMsg,
+          attachment: campaign.attachment,
+          typingSimulation: campaign.typingSimulation,
+          startMessagePart: contact.nextMessagePart,
         });
-        if (!response.ok) {
-          const detail = (await response.text()).slice(0, 2_000);
-          const parsed = categorizeError(detail, response.status);
-          addErrorResult(campaign, campaignId, contactIndex, contact, currentInstance, personalizedMsg, parsed.category, parsed.title, detail, sentAt);
-          if (pauseIfConfigured(campaign, parsed.category, parsed.title)) return;
-        } else {
-          campaign.contacts[contactIndex] = {
-            ...contact,
-            status: 'sent',
-            sentAt,
-            lastInstanceName: currentInstance,
-            attemptCount: (contact.attemptCount || 0) + 1,
-            errorCategory: undefined,
-            errorMessage: undefined,
-          };
-        }
+        campaign.contacts[contactIndex] = {
+          ...contact,
+          status: 'sent',
+          sentAt,
+          lastInstanceName: currentInstance,
+          attemptCount: (contact.attemptCount || 0) + 1,
+          errorCategory: undefined,
+          errorMessage: undefined,
+          nextMessagePart: undefined,
+        };
       }
 
       if (campaign.contacts[contactIndex].status === 'sending') {
@@ -365,6 +356,7 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
           attemptCount: (contact.attemptCount || 0) + 1,
           errorCategory: undefined,
           errorMessage: undefined,
+          nextMessagePart: undefined,
         };
       }
       if (campaign.contacts[contactIndex].status === 'sent') {
@@ -379,7 +371,7 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
           timestamp: new Date().toLocaleTimeString('pt-BR'),
           phone: contact.phone,
           status: 'success',
-          message: `[ROTAÇÃO: ${currentInstance}] Enviado com sucesso`,
+          message: `[ROTAÇÃO: ${currentInstance}] ${splitMessageSequence(personalizedMsg).length || 1} mensagem(ns) enviada(s) com sucesso`,
         });
         campaign.reports.unshift({
           id: `rep_${campaignId}_${contact.id}_${campaign.contacts[contactIndex].attemptCount}`,
@@ -392,9 +384,25 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
         });
       }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : 'Falha de rede desconhecida';
-      const parsed = categorizeError(detail, 0);
-      addErrorResult(campaign, campaignId, contactIndex, contact, currentInstance, personalizedMsg, parsed.category, parsed.title, detail, sentAt);
+      const sequenceError = error instanceof EvolutionMessageSequenceError ? error : null;
+      const detail = sequenceError?.detail || (error instanceof Error ? error.message : 'Falha de rede desconhecida');
+      const parsed = categorizeError(detail, sequenceError?.status || 0);
+      const partialDetail = sequenceError?.sentParts
+        ? `${detail} (${sequenceError.sentParts} mensagem(ns) já enviada(s); retomará no próximo trecho.)`
+        : detail;
+      addErrorResult(
+        campaign,
+        campaignId,
+        contactIndex,
+        contact,
+        currentInstance,
+        personalizedMsg,
+        parsed.category,
+        parsed.title,
+        partialDetail,
+        sentAt,
+        sequenceError?.nextMessagePart
+      );
       if (pauseIfConfigured(campaign, parsed.category, parsed.title)) return;
     }
 
