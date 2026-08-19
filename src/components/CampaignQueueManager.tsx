@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import Papa from 'papaparse';
 import {
   ListOrdered,
   Plus,
@@ -46,8 +45,9 @@ import {
 } from '@/lib/queue-store';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
 import { addStoredReportItem, addStoredReportItems } from '@/lib/schedule-store';
-import { describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
+import { mergeImportedContacts } from '@/lib/contact-import';
 import ContactImportReview from '@/components/ContactImportReview';
+import ContactImportModal from '@/components/ContactImportModal';
 import MessageSequenceControls from '@/components/MessageSequenceControls';
 import { DEFAULT_TYPING_SIMULATION, MAX_MESSAGE_PARTS, splitMessageSequence } from '@/lib/message-sequence';
 
@@ -84,6 +84,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const [manualPhone, setManualPhone] = useState<string>('');
   const [manualName, setManualName] = useState<string>('');
   const [contactImportSummary, setContactImportSummary] = useState<string>('');
+  const [showContactImport, setShowContactImport] = useState<boolean>(false);
   const [messageTemplate, setMessageTemplate] = useState<string>('Olá {nome}! Temos uma novidade imperdível para você.');
   const [typingSimulation, setTypingSimulation] = useState<TypingSimulationConfig>({ ...DEFAULT_TYPING_SIMULATION });
   const [attachment, setAttachment] = useState<QueueCampaignAttachment | null>(null);
@@ -760,46 +761,6 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     reader.readAsDataURL(file);
   };
 
-  // CSV Import
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const input = e.currentTarget;
-
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const imported: ContactItem[] = [];
-        results.data.forEach((row: any, idx) => {
-          const rawPhone = row.telefone || row.phone || row.celular || row.num || Object.values(row)[0];
-          const rawName = row.nome || row.name || row.cliente || '';
-          if (rawPhone) {
-            imported.push({
-              id: `q_csv_${idx}_${Date.now()}`,
-              phone: formatPhoneNumber(String(rawPhone)),
-              name: String(rawName).trim(),
-              status: 'pending',
-              selectedForSending: true,
-            });
-          }
-        });
-        if (imported.length > 0) {
-          const result = mergeImportedContacts(contacts, imported);
-          setContacts(result.contacts);
-          setContactImportSummary(`${file.name} • ${describeContactImport(result)}`);
-        } else {
-          setContactImportSummary('Nenhum número válido foi encontrado no arquivo.');
-        }
-        input.value = '';
-      },
-      error: () => {
-        input.value = '';
-        setContactImportSummary('Não foi possível ler esse arquivo CSV.');
-      },
-    });
-  };
-
   const handleAddManual = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualPhone) return;
@@ -1370,19 +1331,13 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                     Contatos ({contacts.filter((contact) => contact.selectedForSending !== false).length} selecionados de {contacts.length})
                   </span>
                   <div className="flex items-center gap-2">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      id="queue-csv-upload"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="queue-csv-upload"
-                      className="cursor-pointer text-indigo-600 dark:text-indigo-400 hover:underline font-bold flex items-center gap-1"
+                    <button
+                      type="button"
+                      onClick={() => setShowContactImport(true)}
+                      className="text-indigo-600 dark:text-indigo-400 hover:underline font-bold flex items-center gap-1"
                     >
-                      <Upload className="w-3 h-3" /> Importar CSV
-                    </label>
+                      <Upload className="w-3 h-3" /> Importar CSV, TXT ou colar
+                    </button>
                   </div>
                 </div>
 
@@ -1447,6 +1402,15 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
           </div>
         </div>
       )}
+      <ContactImportModal
+        open={showContactImport}
+        currentContacts={contacts}
+        onClose={() => setShowContactImport(false)}
+        onImport={(nextContacts, summary) => {
+          setContacts(nextContacts);
+          setContactImportSummary(summary);
+        }}
+      />
     </div>
   );
 }

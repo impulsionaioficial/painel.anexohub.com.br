@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import Papa from 'papaparse';
 import { Send, Upload, Plus, Trash2, Play, Pause, Sparkles, Clock, FileText, Info, Calendar, BarChart3, Paperclip, X, Image as ImageIcon, FileCheck, Layers, StopCircle, RefreshCw, MessageSquare, ListOrdered } from 'lucide-react';
 import { ContactItem, LogEntry, DetailedReportItem, QueueCampaignItem, TypingSimulationConfig } from '@/lib/types';
 import { getStoredConfig, parseSpintax, formatPhoneNumber } from '@/lib/evolution-store';
@@ -12,6 +11,7 @@ import CampaignQueueManager from '@/components/CampaignQueueManager';
 import ScheduleManager from '@/components/ScheduleManager';
 import ChatViewer from '@/components/ChatViewer';
 import ContactImportReview from '@/components/ContactImportReview';
+import ContactImportModal from '@/components/ContactImportModal';
 import MessageSequenceControls from '@/components/MessageSequenceControls';
 import { getActiveUser, hasPermission } from '@/lib/auth-store';
 import { describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
@@ -37,6 +37,7 @@ export default function DisparadorPage() {
   const [manualPhone, setManualPhone] = useState<string>('');
   const [manualName, setManualName] = useState<string>('');
   const [contactImportSummary, setContactImportSummary] = useState<string>('');
+  const [showContactImport, setShowContactImport] = useState<boolean>(false);
   const [messageTemplate, setMessageTemplate] = useState<string>('Olá {nome}! Temos uma oferta especial para você hoje. Qualquer dúvida nos chame aqui!');
   const [typingSimulation, setTypingSimulation] = useState<TypingSimulationConfig>({ ...DEFAULT_TYPING_SIMULATION });
   const [attachment, setAttachment] = useState<AttachmentFile | null>(null);
@@ -221,47 +222,6 @@ export default function DisparadorPage() {
 
   const removeAttachment = () => {
     setAttachment(null);
-  };
-
-  // CSV Import handler
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const input = e.currentTarget;
-
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const imported: ContactItem[] = [];
-        results.data.forEach((row: any, idx) => {
-          const rawPhone = row.telefone || row.phone || row.celular || row.num || Object.values(row)[0];
-          const rawName = row.nome || row.name || row.cliente || '';
-          if (rawPhone) {
-            imported.push({
-              id: `csv_${idx}_${Date.now()}`,
-              phone: formatPhoneNumber(String(rawPhone)),
-              name: String(rawName).trim(),
-              status: 'pending',
-              selectedForSending: true,
-            });
-          }
-        });
-
-        if (imported.length > 0) {
-          const result = mergeImportedContacts(contacts, imported);
-          setContacts(result.contacts);
-          setContactImportSummary(`${file.name} • ${describeContactImport(result)}`);
-        } else {
-          alert('Nenhum número de telefone válido encontrado no arquivo CSV.');
-        }
-        input.value = '';
-      },
-      error: () => {
-        input.value = '';
-        alert('Erro ao ler arquivo CSV');
-      },
-    });
   };
 
   const handleAddManual = (e: React.FormEvent) => {
@@ -741,20 +701,13 @@ export default function DisparadorPage() {
                   <Upload className="w-5 h-5 text-indigo-600 dark:text-indigo-400" /> Adicionar Contatos
                 </h2>
 
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-dashed border-slate-300 dark:border-slate-800 hover:border-indigo-500 text-center transition-colors">
-                  <input
-                    type="file"
-                    accept=".csv"
-                    id="csv-upload"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  <label htmlFor="csv-upload" className="cursor-pointer space-y-1 block">
+                <button type="button" onClick={() => setShowContactImport(true)} className="w-full p-4 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-dashed border-slate-300 dark:border-slate-800 hover:border-indigo-500 hover:bg-indigo-50/50 dark:hover:bg-indigo-500/5 text-center transition-colors">
+                  <span className="space-y-1 block">
                     <Upload className="w-6 h-6 text-slate-400 mx-auto" />
-                    <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400">Importar arquivo CSV / Excel</p>
-                    <p className="text-[11px] text-slate-400">Formato com colunas: nome, telefone</p>
-                  </label>
-                </div>
+                    <span className="block text-xs font-bold text-indigo-600 dark:text-indigo-400">Abrir importador de contatos</span>
+                    <span className="block text-[11px] text-slate-400">CSV, TXT ou copiar e colar • revisão em planilha</span>
+                  </span>
+                </button>
 
                 <form onSubmit={handleAddManual} className="flex gap-2">
                   <input
@@ -837,6 +790,15 @@ export default function DisparadorPage() {
           </div>
         </div>
       )}
+      <ContactImportModal
+        open={showContactImport}
+        currentContacts={contacts}
+        onClose={() => setShowContactImport(false)}
+        onImport={(nextContacts, summary) => {
+          setContacts(nextContacts);
+          setContactImportSummary(summary);
+        }}
+      />
     </div>
   );
 }
