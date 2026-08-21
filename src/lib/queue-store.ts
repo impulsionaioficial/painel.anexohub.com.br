@@ -1,5 +1,6 @@
 import { QueueCampaignItem } from './types';
 import { normalizeTypingSimulation } from './message-sequence';
+import { normalizeCampaignRest } from './campaign-timing';
 
 const QUEUE_STORAGE_KEY = 'awp_queue_campaigns';
 
@@ -20,6 +21,8 @@ function normalizeCampaign(campaign: QueueCampaignItem): QueueCampaignItem {
     contacts,
     selectedInstances: Array.isArray(campaign.selectedInstances) ? campaign.selectedInstances : [],
     typingSimulation: normalizeTypingSimulation(campaign.typingSimulation),
+    restConfig: normalizeCampaignRest(campaign.restConfig),
+    messagesSinceRest: Math.max(0, Number(campaign.messagesSinceRest) || 0),
     errorPolicy: campaign.errorPolicy || { pauseOn: [...DEFAULT_PAUSE_ON_ERRORS] },
     sentCount: contacts.filter((contact) => contact.status === 'sent').length,
     errorCount: contacts.filter((contact) => contact.status === 'error').length,

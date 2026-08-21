@@ -90,6 +90,14 @@ export interface QueueErrorPolicy {
   pauseOn: ErrorCategoryType[];
 }
 
+export interface CampaignRestConfig {
+  enabled: boolean;
+  /** Quantidade de balões enviados antes do descanso. */
+  everyMessages: number;
+  /** Duração do descanso em segundos. */
+  durationSeconds: number;
+}
+
 export interface QueueCampaignAttachment {
   name: string;
   base64: string;
@@ -108,6 +116,9 @@ export interface QueueCampaignItem {
   enableSpintax: boolean;
   minDelay: number;
   maxDelay: number;
+  restConfig?: CampaignRestConfig;
+  messagesSinceRest?: number;
+  restUntil?: string;
   executionMode: QueueExecutionMode;
   order: number;
   status: QueueCampaignStatus;

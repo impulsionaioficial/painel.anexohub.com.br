@@ -1,9 +1,10 @@
-import { ContactItem, ErrorCategoryType, DetailedReportItem, QueueErrorPolicy, TypingSimulationConfig } from './types';
+import { CampaignRestConfig, ContactItem, ErrorCategoryType, DetailedReportItem, QueueErrorPolicy, TypingSimulationConfig } from './types';
 import { parseSpintax } from './evolution-store';
 import { dispatchWebhookEvent } from './webhook-dispatcher';
 import { EvolutionMessageSequenceError, sendEvolutionMessageSequence } from './evolution-message-sequence';
 import { normalizeTypingSimulation, splitMessageSequence } from './message-sequence';
 import { MAX_CAMPAIGN_CONTACTS } from './contact-import';
+import { normalizeCampaignRest } from './campaign-timing';
 
 export interface BackgroundCampaign {
   id: string;
@@ -18,6 +19,9 @@ export interface BackgroundCampaign {
   enableSpintax: boolean;
   minDelay: number;
   maxDelay: number;
+  restConfig: CampaignRestConfig;
+  messagesSinceRest: number;
+  restUntil?: string;
   selectedInstances: string[];
   errorPolicy: QueueErrorPolicy;
   pauseReason?: string;
@@ -38,6 +42,7 @@ export interface CampaignEditableFields {
   enableSpintax?: boolean;
   minDelay?: number;
   maxDelay?: number;
+  restConfig?: CampaignRestConfig;
   errorPolicy?: QueueErrorPolicy;
   attachment?: { name: string; base64: string; mimetype: string; sizeKb: number } | null;
 }
@@ -146,6 +151,11 @@ export function updateBackgroundCampaign(
   if (typeof updates.enableSpintax === 'boolean') campaign.enableSpintax = updates.enableSpintax;
   if (Number.isFinite(updates.minDelay)) campaign.minDelay = Math.max(2, Math.min(3_600, Number(updates.minDelay)));
   if (Number.isFinite(updates.maxDelay)) campaign.maxDelay = Math.max(campaign.minDelay, Math.min(3_600, Number(updates.maxDelay)));
+  if (updates.restConfig) {
+    campaign.restConfig = normalizeCampaignRest(updates.restConfig);
+    campaign.messagesSinceRest = 0;
+    campaign.restUntil = undefined;
+  }
   if (updates.errorPolicy) campaign.errorPolicy = normalizeErrorPolicy(updates.errorPolicy);
   if (updates.attachment !== undefined) {
     if (updates.attachment?.base64 && updates.attachment.base64.length > 10 * 1024 * 1024) {
@@ -181,7 +191,8 @@ export function startBackgroundCampaign(
   evolutionConfig: { baseUrl: string; apiKey: string },
   attachment?: { name: string; base64: string; mimetype: string; sizeKb: number },
   errorPolicy?: QueueErrorPolicy,
-  typingSimulation?: TypingSimulationConfig
+  typingSimulation?: TypingSimulationConfig,
+  restConfig?: CampaignRestConfig
 ): BackgroundCampaign {
   const campaignId = `camp_${Date.now()}`;
   const validInstances = selectedInstances.length > 0 ? selectedInstances : ['instancia_default'];
@@ -197,6 +208,8 @@ export function startBackgroundCampaign(
     enableSpintax,
     minDelay,
     maxDelay,
+    restConfig: normalizeCampaignRest(restConfig),
+    messagesSinceRest: 0,
     selectedInstances: validInstances,
     errorPolicy: normalizeErrorPolicy(errorPolicy),
     evolutionConfig,
@@ -296,6 +309,15 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
   if (!campaign) return;
 
   while (campaign.status === 'running' && campaignGeneration.get(campaignId) === generation) {
+    if (campaign.restUntil) {
+      const restEnd = Date.parse(campaign.restUntil);
+      const remainingSeconds = Number.isFinite(restEnd) ? Math.max(0, Math.ceil((restEnd - Date.now()) / 1_000)) : 0;
+      if (remainingSeconds > 0 && !(await waitForDelay(campaignId, generation, remainingSeconds))) return;
+      campaign.restUntil = undefined;
+      campaign.pauseReason = undefined;
+      continue;
+    }
+
     const contactIndex = campaign.contacts.findIndex((contact) => contact.selectedForSending !== false && contact.status === 'pending');
     if (contactIndex === -1) {
       campaign.status = 'completed';
@@ -321,12 +343,14 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
     const cleanPhone = contact.phone.replace(/\D/g, '');
     const sentAt = new Date().toLocaleString('pt-BR');
     const { baseUrl, apiKey } = campaign.evolutionConfig;
+    let sentPartsThisAttempt = 0;
 
     try {
       if (!baseUrl || !apiKey || baseUrl.includes('exemplo.com')) {
         await new Promise((resolve) => setTimeout(resolve, 600));
+        sentPartsThisAttempt = splitMessageSequence(personalizedMsg).length || 1;
       } else {
-        await sendEvolutionMessageSequence({
+        const sequenceResult = await sendEvolutionMessageSequence({
           baseUrl,
           apiKey,
           instanceName: currentInstance,
@@ -336,6 +360,7 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
           typingSimulation: campaign.typingSimulation,
           startMessagePart: contact.nextMessagePart,
         });
+        sentPartsThisAttempt = sequenceResult.sentParts;
         campaign.contacts[contactIndex] = {
           ...contact,
           status: 'sent',
@@ -386,6 +411,7 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
       }
     } catch (error) {
       const sequenceError = error instanceof EvolutionMessageSequenceError ? error : null;
+      sentPartsThisAttempt = sequenceError?.sentParts || 0;
       const detail = sequenceError?.detail || (error instanceof Error ? error.message : 'Falha de rede desconhecida');
       const parsed = categorizeError(detail, sequenceError?.status || 0);
       const partialDetail = sequenceError?.sentParts
@@ -404,11 +430,28 @@ async function runCampaignLoop(campaignId: string, generation: number): Promise<
         sentAt,
         sequenceError?.nextMessagePart
       );
-      if (pauseIfConfigured(campaign, parsed.category, parsed.title)) return;
+      if (pauseIfConfigured(campaign, parsed.category, parsed.title)) {
+        campaign.messagesSinceRest += sentPartsThisAttempt;
+        return;
+      }
     }
+
+    campaign.messagesSinceRest += sentPartsThisAttempt;
 
     const hasMorePending = campaign.contacts.some((pendingContact) => pendingContact.selectedForSending !== false && pendingContact.status === 'pending');
     if (!hasMorePending) continue;
+    if (campaign.restConfig.enabled && campaign.messagesSinceRest >= campaign.restConfig.everyMessages) {
+      campaign.messagesSinceRest = 0;
+      campaign.restUntil = new Date(Date.now() + campaign.restConfig.durationSeconds * 1_000).toISOString();
+      campaign.pauseReason = `Descanso programado por ${campaign.restConfig.durationSeconds} segundos após ${campaign.restConfig.everyMessages} mensagens.`;
+      campaign.logs.unshift({
+        timestamp: new Date().toLocaleTimeString('pt-BR'),
+        phone: 'SERVIDOR',
+        status: 'info',
+        message: `☕ Descanso programado iniciado por ${campaign.restConfig.durationSeconds}s.`,
+      });
+      continue;
+    }
     const delaySec = Math.floor(Math.random() * (campaign.maxDelay - campaign.minDelay + 1)) + campaign.minDelay;
     campaign.logs.unshift({
       timestamp: new Date().toLocaleTimeString('pt-BR'),

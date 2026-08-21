@@ -25,6 +25,7 @@ import {
   Edit3,
   RotateCcw,
   Settings2,
+  Coffee,
 } from 'lucide-react';
 import {
   ContactItem,
@@ -33,6 +34,7 @@ import {
   QueueCampaignAttachment,
   ErrorCategoryType,
   TypingSimulationConfig,
+  CampaignRestConfig,
 } from '@/lib/types';
 import {
   getStoredQueueCampaigns,
@@ -50,6 +52,7 @@ import ContactImportReview from '@/components/ContactImportReview';
 import ContactImportModal from '@/components/ContactImportModal';
 import MessageSequenceControls from '@/components/MessageSequenceControls';
 import { DEFAULT_TYPING_SIMULATION, MAX_MESSAGE_PARTS, splitMessageSequence } from '@/lib/message-sequence';
+import { DEFAULT_CAMPAIGN_REST, normalizeCampaignDelay, normalizeCampaignRest } from '@/lib/campaign-timing';
 
 interface CampaignQueueManagerProps {
   onViewReport: (campaign: QueueCampaignItem) => void;
@@ -92,6 +95,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
   const [enableSpintax, setEnableSpintax] = useState<boolean>(true);
   const [minDelay, setMinDelay] = useState<number>(10);
   const [maxDelay, setMaxDelay] = useState<number>(25);
+  const [restConfig, setRestConfig] = useState<CampaignRestConfig>({ ...DEFAULT_CAMPAIGN_REST });
   const [pauseOnErrors, setPauseOnErrors] = useState<ErrorCategoryType[]>(DEFAULT_PAUSE_ON_ERRORS);
 
   // Active running runners map
@@ -236,6 +240,23 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         break;
       }
 
+      // Um descanso em andamento é persistido para sobreviver a pausas e
+      // recarregamentos. A fila pode ser pausada ou parada durante a espera.
+      if (camp.restUntil) {
+        const restEnd = Date.parse(camp.restUntil);
+        while (Number.isFinite(restEnd) && Date.now() < restEnd) {
+          if (runnerGenerationRef.current.get(campaignId) !== generation) break;
+          const liveCampaign = getStoredQueueCampaigns().find((item) => item.id === campaignId);
+          if (!liveCampaign || liveCampaign.status !== 'running') break;
+          await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, restEnd - Date.now())));
+        }
+        const liveAfterRest = getStoredQueueCampaigns().find((item) => item.id === campaignId);
+        if (!liveAfterRest || liveAfterRest.status !== 'running' || runnerGenerationRef.current.get(campaignId) !== generation) continue;
+        const resumed = updateStoredQueueCampaign(campaignId, { restUntil: undefined, pauseReason: undefined });
+        setQueue(resumed);
+        continue;
+      }
+
       // Somente contatos marcados e ainda pendentes entram na retomada.
       const pendingIndex = camp.contacts.findIndex(
         (contact) => contact.selectedForSending !== false && contact.status === 'pending'
@@ -293,6 +314,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         const latestIndex = latest.contacts.findIndex((item) => item.id === contact.id);
         if (latestIndex < 0) continue;
         const updatedContacts = [...latest.contacts];
+        const sentPartsThisAttempt = Math.max(0, Number(data.sentParts) || (data.success ? splitMessageSequence(personalizedMsg).length || 1 : 0));
+        const nextMessagesSinceRest = (latest.messagesSinceRest || 0) + sentPartsThisAttempt;
 
         if (data.success) {
           updatedContacts[latestIndex] = {
@@ -322,6 +345,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             contacts: updatedContacts,
             sentCount: nextSentCount,
             errorCount: updatedContacts.filter((item) => item.status === 'error').length,
+            messagesSinceRest: nextMessagesSinceRest,
           });
           setQueue(updated);
         } else {
@@ -362,6 +386,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             pauseReason: shouldPause
               ? `${data.errorTitle || data.error || 'Erro configurado'}. A fila foi pausada pela política de erros.`
               : undefined,
+            messagesSinceRest: nextMessagesSinceRest,
           });
           setQueue(updated);
         }
@@ -416,6 +441,18 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         (item) => item.selectedForSending !== false && item.status === 'pending'
       );
       if (!latestCampaign || !hasMorePending) continue;
+
+      const latestRest = normalizeCampaignRest(latestCampaign.restConfig);
+      if (latestRest.enabled && (latestCampaign.messagesSinceRest || 0) >= latestRest.everyMessages) {
+        const restUntil = new Date(Date.now() + latestRest.durationSeconds * 1_000).toISOString();
+        const resting = updateStoredQueueCampaign(campaignId, {
+          messagesSinceRest: 0,
+          restUntil,
+          pauseReason: `Descanso programado por ${latestRest.durationSeconds} segundos após ${latestRest.everyMessages} mensagens.`,
+        });
+        setQueue(resting);
+        continue;
+      }
 
       const delaySec = Math.floor(Math.random() * (latestCampaign.maxDelay - latestCampaign.minDelay + 1)) + latestCampaign.minDelay;
       const delayEnd = Date.now() + delaySec * 1000;
@@ -541,6 +578,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     setEnableSpintax(true);
     setMinDelay(10);
     setMaxDelay(25);
+    setRestConfig({ ...DEFAULT_CAMPAIGN_REST });
     setSelectedInstances(availableInstances[0]?.name ? [availableInstances[0].name] : []);
     setPauseOnErrors([...DEFAULT_PAUSE_ON_ERRORS]);
     setShowCreateModal(true);
@@ -580,6 +618,7 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
     setEnableSpintax(editableCampaign.enableSpintax);
     setMinDelay(editableCampaign.minDelay);
     setMaxDelay(editableCampaign.maxDelay);
+    setRestConfig(normalizeCampaignRest(editableCampaign.restConfig));
     setPauseOnErrors([...(editableCampaign.errorPolicy?.pauseOn || DEFAULT_PAUSE_ON_ERRORS)]);
     setShowCreateModal(true);
   };
@@ -654,6 +693,9 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       return;
     }
 
+    const normalizedDelay = normalizeCampaignDelay(minDelay, maxDelay);
+    const normalizedRest = normalizeCampaignRest(restConfig);
+
     const normalizedContacts = contacts.map((contact) => ({
       ...contact,
       selectedForSending: contact.selectedForSending !== false,
@@ -670,8 +712,9 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         typingSimulation,
         selectedInstances,
         enableSpintax,
-        minDelay,
-        maxDelay,
+        minDelay: normalizedDelay.minDelay,
+        maxDelay: normalizedDelay.maxDelay,
+        restConfig: normalizedRest,
         errorPolicy: { pauseOn: pauseOnErrors },
         attachment: attachment || null,
       };
@@ -697,6 +740,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
         sentCount: normalizedContacts.filter((contact) => contact.status === 'sent').length,
         errorCount: normalizedContacts.filter((contact) => contact.status === 'error').length,
         completedAt: undefined,
+        messagesSinceRest: 0,
+        restUntil: undefined,
         pauseReason: 'Campanha editada. Revise e clique em Continuar para processar os contatos pendentes selecionados.',
       });
       setQueue(updated);
@@ -713,8 +758,10 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
       attachment: attachment ? attachment : undefined,
       selectedInstances,
       enableSpintax,
-      minDelay,
-      maxDelay,
+      minDelay: normalizedDelay.minDelay,
+      maxDelay: normalizedDelay.maxDelay,
+      restConfig: normalizedRest,
+      messagesSinceRest: 0,
       executionMode,
       order: queue.length + 1,
       status: executionMode === 'parallel' ? 'running' : 'queued',
@@ -886,6 +933,9 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
             const processed = sent + failures;
             const progress = selectedContacts.length > 0 ? Math.round((processed / selectedContacts.length) * 100) : 0;
             const messagePartCount = Math.max(1, splitMessageSequence(camp.messageTemplate).length);
+            const campaignRest = normalizeCampaignRest(camp.restConfig);
+            const restUntilMs = camp.restUntil ? Date.parse(camp.restUntil) : 0;
+            const isResting = camp.status === 'running' && Boolean(camp.restUntil);
 
             return (
               <div
@@ -957,6 +1007,10 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                       <span>&bull;</span>
                       <span>{camp.typingSimulation?.enabled === false ? 'Digitação simulada desativada' : '⌨️ Digitação simulada'}</span>
                       <span>&bull;</span>
+                      <span>⏱️ Intervalo: {camp.minDelay}–{camp.maxDelay}s</span>
+                      <span>&bull;</span>
+                      <span>{campaignRest.enabled ? `☕ Descanso: a cada ${campaignRest.everyMessages} mensagens por ${campaignRest.durationSeconds}s` : 'Descanso desativado'}</span>
+                      <span>&bull;</span>
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span>Instâncias:</span>
                         {camp.selectedInstances.map((inst) => (
@@ -980,6 +1034,12 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                       <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
                         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                         <span>{camp.pauseReason}</span>
+                      </div>
+                    )}
+                    {isResting && (
+                      <div className="flex items-start gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-semibold text-indigo-800 dark:border-indigo-500/20 dark:bg-indigo-500/10 dark:text-indigo-300">
+                        <Coffee className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>Descansando até {new Date(restUntilMs).toLocaleTimeString('pt-BR')}. A fila continuará automaticamente.</span>
                       </div>
                     )}
                   </div>
@@ -1265,8 +1325,8 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                 )}
               </div>
 
-              {/* Delay & Spintax */}
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 space-y-2 text-xs">
+              {/* Interval, programmed rest & Spintax */}
+              <div className="space-y-4 rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 text-xs dark:border-indigo-500/20 dark:bg-indigo-500/5">
                 <label className="flex items-center gap-2 text-slate-700 dark:text-slate-300 font-bold cursor-pointer">
                   <input
                     type="checkbox"
@@ -1276,24 +1336,50 @@ export default function CampaignQueueManager({ onViewReport }: CampaignQueueMana
                   />
                   <Sparkles className="w-3.5 h-3.5 text-indigo-500" /> Ativar Spintax
                 </label>
-                <div className="flex items-center gap-3">
-                  <span className="text-slate-500">Delay aleatório:</span>
-                  <input
-                    type="number"
-                    min={5}
-                    value={minDelay}
-                    onChange={(e) => setMinDelay(Number(e.target.value))}
-                    className="w-16 p-1.5 rounded-lg bg-white dark:bg-slate-900 border text-center font-bold"
-                  />
-                  <span className="text-slate-400">até</span>
-                  <input
-                    type="number"
-                    max={120}
-                    value={maxDelay}
-                    onChange={(e) => setMaxDelay(Number(e.target.value))}
-                    className="w-16 p-1.5 rounded-lg bg-white dark:bg-slate-900 border text-center font-bold"
-                  />
-                  <span className="text-slate-400">segundos</span>
+
+                <div className="border-t border-indigo-200/70 pt-3 dark:border-indigo-500/15">
+                  <div className="flex items-start gap-2">
+                    <Clock className="mt-0.5 h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                    <div>
+                      <p className="font-extrabold text-slate-800 dark:text-slate-200">Tempo entre cada contato</p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400">O sistema sorteia um intervalo diferente dentro desta faixa após cada contato processado.</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-3 pl-6">
+                    <label className="space-y-1 text-[10px] font-bold text-slate-500">
+                      <span>Mínimo (segundos)</span>
+                      <input type="number" min={2} max={3600} value={minDelay} onChange={(event) => setMinDelay(Number(event.target.value))} className="w-full rounded-xl border border-slate-200 bg-white p-2.5 text-center font-mono text-xs font-bold dark:border-slate-800 dark:bg-slate-950" />
+                    </label>
+                    <label className="space-y-1 text-[10px] font-bold text-slate-500">
+                      <span>Máximo (segundos)</span>
+                      <input type="number" min={2} max={3600} value={maxDelay} onChange={(event) => setMaxDelay(Number(event.target.value))} className="w-full rounded-xl border border-slate-200 bg-white p-2.5 text-center font-mono text-xs font-bold dark:border-slate-800 dark:bg-slate-950" />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="border-t border-indigo-200/70 pt-3 dark:border-indigo-500/15">
+                  <label className="flex cursor-pointer items-center justify-between gap-3">
+                    <span className="flex items-start gap-2">
+                      <Coffee className="mt-0.5 h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      <span>
+                        <span className="block font-extrabold text-slate-800 dark:text-slate-200">Descanso programado</span>
+                        <span className="block text-[10px] text-slate-500 dark:text-slate-400">Depois de uma quantidade de mensagens, a fila descansa antes de continuar.</span>
+                      </span>
+                    </span>
+                    <input type="checkbox" checked={restConfig.enabled} onChange={(event) => setRestConfig((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-amber-600" />
+                  </label>
+                  {restConfig.enabled && (
+                    <div className="mt-3 grid grid-cols-2 gap-3 pl-6">
+                      <label className="space-y-1 text-[10px] font-bold text-slate-500">
+                        <span>Descansar a cada</span>
+                        <span className="flex items-center gap-2"><input type="number" min={1} max={10000} value={restConfig.everyMessages} onChange={(event) => setRestConfig((current) => ({ ...current, everyMessages: Number(event.target.value) }))} className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white p-2.5 text-center font-mono text-xs font-bold dark:border-slate-800 dark:bg-slate-950" /><span>mensagens</span></span>
+                      </label>
+                      <label className="space-y-1 text-[10px] font-bold text-slate-500">
+                        <span>Tempo de descanso</span>
+                        <span className="flex items-center gap-2"><input type="number" min={1} max={86400} value={restConfig.durationSeconds} onChange={(event) => setRestConfig((current) => ({ ...current, durationSeconds: Number(event.target.value) }))} className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white p-2.5 text-center font-mono text-xs font-bold dark:border-slate-800 dark:bg-slate-950" /><span>segundos</span></span>
+                      </label>
+                    </div>
+                  )}
                 </div>
               </div>
 

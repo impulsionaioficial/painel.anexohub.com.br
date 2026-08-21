@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   const rateLimitError = checkRateLimit(request, 'campaign-start', 10, 60_000);
   if (rateLimitError) return NextResponse.json({ success: false, error: rateLimitError.error }, { status: rateLimitError.status });
   try {
-    const { contacts, messageTemplate, minDelay, maxDelay, enableSpintax, baseUrl, apiKey, selectedInstances, attachment, errorPolicy, typingSimulation } = await request.json();
+    const { contacts, messageTemplate, minDelay, maxDelay, enableSpintax, baseUrl, apiKey, selectedInstances, attachment, errorPolicy, typingSimulation, restConfig } = await request.json();
 
     if (!Array.isArray(contacts) || contacts.length === 0) {
       return NextResponse.json({ success: false, error: 'Selecione contatos para disparar.' });
@@ -58,7 +58,8 @@ export async function POST(request: Request) {
       { baseUrl: safeBaseUrl, apiKey },
       attachment,
       errorPolicy,
-      typingSimulation
+      typingSimulation,
+      restConfig
     );
 
     return NextResponse.json({
