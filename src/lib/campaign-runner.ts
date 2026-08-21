@@ -3,6 +3,7 @@ import { parseSpintax } from './evolution-store';
 import { dispatchWebhookEvent } from './webhook-dispatcher';
 import { EvolutionMessageSequenceError, sendEvolutionMessageSequence } from './evolution-message-sequence';
 import { normalizeTypingSimulation, splitMessageSequence } from './message-sequence';
+import { MAX_CAMPAIGN_CONTACTS } from './contact-import';
 
 export interface BackgroundCampaign {
   id: string;
@@ -159,8 +160,8 @@ export function updateBackgroundCampaign(
     campaign.selectedInstances = instances;
   }
   if (Array.isArray(updates.contacts)) {
-    if (updates.contacts.length === 0 || updates.contacts.length > 1_000) {
-      return { success: false, error: 'A campanha deve conter entre 1 e 1.000 contatos.' };
+    if (updates.contacts.length === 0 || updates.contacts.length > MAX_CAMPAIGN_CONTACTS) {
+      return { success: false, error: `A campanha deve conter entre 1 e ${MAX_CAMPAIGN_CONTACTS.toLocaleString('pt-BR')} contatos.` };
     }
     campaign.contacts = updates.contacts.map(normalizeContact);
   }

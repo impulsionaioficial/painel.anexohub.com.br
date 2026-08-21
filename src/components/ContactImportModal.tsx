@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { ContactItem } from '@/lib/types';
-import { contactPhoneKey, describeContactImport, mergeImportedContacts } from '@/lib/contact-import';
+import { contactPhoneKey, describeContactImport, MAX_CAMPAIGN_CONTACTS, mergeImportedContacts } from '@/lib/contact-import';
 import { formatPhoneNumber } from '@/lib/evolution-store';
 
 interface ContactImportModalProps {
@@ -28,7 +28,7 @@ interface RawImportRow {
   line: number;
   name: string;
   phoneInput: string;
-  selected: boolean;
+  selected?: boolean;
 }
 
 type RowState = 'valid' | 'invalid' | 'duplicate' | 'limit';
@@ -39,8 +39,8 @@ interface EvaluatedImportRow extends RawImportRow {
   reason: string;
 }
 
-const PHONE_HEADERS = ['telefone', 'phone', 'celular', 'numero', 'número', 'num', 'whatsapp'];
-const NAME_HEADERS = ['nome', 'name', 'cliente', 'contato'];
+const PHONE_HEADERS = ['telefone', 'phone', 'celular', 'numero', 'número', 'num', 'whatsapp', 'numero do whatsapp', 'número do whatsapp'];
+const NAME_HEADERS = ['nome', 'name', 'cliente', 'contato', 'nome no whatsapp'];
 
 function normalizeHeader(value: string): string {
   return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
@@ -96,8 +96,9 @@ function parseRows(text: string): RawImportRow[] {
       id: `import_${Date.now()}_${index}`,
       line: index + (hasHeader ? 2 : 1),
       name: name.trim(),
-      phoneInput: phoneInput.trim(),
-      selected: true,
+      // O exportador para Excel usa um apóstrofo inicial para impedir notação
+      // científica. Ele não faz parte do telefone e deve ser removido.
+      phoneInput: phoneInput.trim().replace(/^'+/, ''),
     };
   });
 }
@@ -142,9 +143,7 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
 
   const evaluatedRows = useMemo<EvaluatedImportRow[]>(() => {
     const known = new Set(currentContacts.map((contact) => contactPhoneKey(contact.phone)).filter(Boolean));
-    const initialKnownCount = known.size;
-    const availableSlots = Math.max(0, 1_000 - currentContacts.length);
-
+    const acceptedRows = new Set<string>();
     return rows.map((row) => {
       const rawDigits = contactPhoneKey(row.phoneInput);
       const formattedPhone = formatPhoneNumber(row.phoneInput);
@@ -153,17 +152,22 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
       let state: RowState = 'valid';
       let reason = 'Pronto para importar';
 
-      if (!row.phoneInput || rawDigits.length < 8 || key.length > 15 || containsInvalidCharacters) {
-        state = 'invalid';
-        reason = !row.phoneInput ? 'Número não informado' : 'Número inválido (use de 8 a 15 dígitos)';
-      } else if (known.has(key)) {
+      const invalidNumber = !row.phoneInput || rawDigits.length < 8 || key.length > 15 || containsInvalidCharacters;
+
+      if (key && known.has(key)) {
         state = 'duplicate';
         reason = 'Número duplicado ou já presente na lista';
-      } else if (known.size - initialKnownCount >= availableSlots) {
+      } else if (invalidNumber) {
+        state = 'invalid';
+        reason = !row.phoneInput ? 'Número não informado' : 'Número inválido (use de 8 a 15 dígitos)';
+      } else if (currentContacts.length + acceptedRows.size >= MAX_CAMPAIGN_CONTACTS) {
         state = 'limit';
-        reason = 'Acima do limite de 1.000 contatos';
-      } else {
-        known.add(key);
+        reason = `Acima do limite de ${MAX_CAMPAIGN_CONTACTS.toLocaleString('pt-BR')} contatos`;
+      }
+
+      if (state !== 'duplicate' && state !== 'limit') {
+        acceptedRows.add(row.id);
+        if (key) known.add(key);
       }
 
       return { ...row, formattedPhone, state, reason };
@@ -178,7 +182,10 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
   const validCount = evaluatedRows.filter((row) => row.state === 'valid').length;
   const invalidCount = evaluatedRows.filter((row) => row.state === 'invalid' || row.state === 'limit').length;
   const duplicateCount = evaluatedRows.filter((row) => row.state === 'duplicate').length;
-  const selectedValidCount = evaluatedRows.filter((row) => row.state === 'valid' && row.selected).length;
+  const isSelected = (row: EvaluatedImportRow) => row.selected ?? row.state === 'valid';
+  const importableRows = evaluatedRows.filter((row) => row.state === 'valid' || row.state === 'invalid');
+  const selectedCount = importableRows.filter(isSelected).length;
+  const selectedInvalidCount = evaluatedRows.filter((row) => row.state === 'invalid' && isSelected(row)).length;
 
   const loadText = (text: string, label: string) => {
     const parsedRows = parseRows(text);
@@ -214,18 +221,24 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
     setRows((current) => current.map((row) => ids.has(row.id) ? { ...row, selected } : row));
   };
 
+  const setVisibleInvalidSelection = (selected: boolean) => {
+    const ids = new Set(visibleRows.filter((row) => row.state === 'invalid' && contactPhoneKey(row.phoneInput).length > 0).map((row) => row.id));
+    setRows((current) => current.map((row) => ids.has(row.id) ? { ...row, selected } : row));
+  };
+
   const confirmImport = () => {
-    const imported: ContactItem[] = evaluatedRows
-      .filter((row) => row.state === 'valid' && row.selected)
+    const imported: ContactItem[] = importableRows
       .map((row) => ({
         id: `imported_${row.line}_${Date.now()}_${row.id}`,
         name: row.name || 'Sem nome',
-        phone: row.formattedPhone,
+        phone: row.formattedPhone || row.phoneInput,
         status: 'pending',
-        selectedForSending: true,
+        selectedForSending: isSelected(row),
+        importValidation: row.state === 'invalid' ? 'invalid' as const : 'valid' as const,
+        importValidationMessage: row.state === 'invalid' ? row.reason : undefined,
       }));
     const result = mergeImportedContacts(currentContacts, imported);
-    onImport(result.contacts, `${sourceName || 'Texto colado'} • ${describeContactImport(result)} • ${invalidCount} inválido${invalidCount === 1 ? '' : 's'} na origem${duplicateCount ? ` • ${duplicateCount} duplicado${duplicateCount === 1 ? '' : 's'}` : ''}`);
+    onImport(result.contacts, `${sourceName || 'Texto colado'} • ${describeContactImport(result)} • ${invalidCount} sinalizado${invalidCount === 1 ? '' : 's'} como inválido${invalidCount === 1 ? '' : 's'}${duplicateCount ? ` • ${duplicateCount} duplicado${duplicateCount === 1 ? '' : 's'} ignorado${duplicateCount === 1 ? '' : 's'}` : ''}`);
     closeModal();
   };
 
@@ -274,6 +287,9 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
               <p>• TXT separado por vírgula, ponto e vírgula ou tabulação</p>
               <p>• Um número por linha também funciona</p>
             </div>
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-[10px] leading-relaxed text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-300">
+              Linhas inválidas serão mantidas, mas começam desmarcadas. Você pode marcá-las para envio por sua decisão.
+            </div>
             {error && <div className="mt-4 flex gap-2 rounded-xl bg-rose-50 p-3 text-[11px] font-medium text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"><AlertCircle className="h-4 w-4 shrink-0" />{error}</div>}
           </aside>
 
@@ -288,6 +304,8 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
               <div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar nome ou número..." className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-xs outline-none focus:border-indigo-500 dark:border-slate-700 dark:bg-slate-950" /></div>
               <button type="button" onClick={() => setAllVisible(true)} className="rounded-lg px-2 py-2 text-[10px] font-bold text-indigo-600 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-500/10">Marcar válidos</button>
               <button type="button" onClick={() => setAllVisible(false)} className="rounded-lg px-2 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Desmarcar válidos</button>
+              <button type="button" onClick={() => setVisibleInvalidSelection(true)} className="rounded-lg px-2 py-2 text-[10px] font-bold text-rose-600 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-500/10">Marcar inválidos</button>
+              <button type="button" onClick={() => setVisibleInvalidSelection(false)} className="rounded-lg px-2 py-2 text-[10px] font-bold text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800">Desmarcar inválidos</button>
             </div>
 
             <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 dark:border-slate-700">
@@ -301,10 +319,10 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
                   <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
                     {visibleRows.map((row) => (
                       <tr key={row.id} className={rowColor(row.state)}>
-                        <td className="px-3 py-2"><input type="checkbox" checked={row.state === 'valid' && row.selected} disabled={row.state !== 'valid'} onChange={(event) => updateRow(row.id, { selected: event.target.checked })} className="h-4 w-4 rounded border-slate-300 text-indigo-600" /></td>
+                        <td className="px-3 py-2"><input type="checkbox" checked={(row.state === 'valid' || row.state === 'invalid') && isSelected(row)} disabled={(row.state !== 'valid' && row.state !== 'invalid') || (row.state === 'invalid' && contactPhoneKey(row.phoneInput).length === 0)} onChange={(event) => updateRow(row.id, { selected: event.target.checked })} className="h-4 w-4 rounded border-slate-300 text-indigo-600" title={row.state === 'invalid' ? 'Você pode incluir este número por sua conta e risco' : undefined} /></td>
                         <td className="px-3 py-2 font-mono text-slate-500">{row.line}</td>
                         <td className="px-3 py-2"><input value={row.name} onChange={(event) => updateRow(row.id, { name: event.target.value })} placeholder="Sem nome" className="w-full min-w-32 rounded-lg border border-transparent bg-transparent px-2 py-1.5 font-medium outline-none hover:border-slate-300 focus:border-indigo-500 dark:hover:border-slate-600" /></td>
-                        <td className="px-3 py-2"><input value={row.phoneInput} onChange={(event) => updateRow(row.id, { phoneInput: event.target.value, selected: true })} className="w-full min-w-40 rounded-lg border border-transparent bg-transparent px-2 py-1.5 font-mono outline-none hover:border-slate-300 focus:border-indigo-500 dark:hover:border-slate-600" /></td>
+                        <td className="px-3 py-2"><input value={row.phoneInput} onChange={(event) => updateRow(row.id, { phoneInput: event.target.value, selected: undefined })} className="w-full min-w-40 rounded-lg border border-transparent bg-transparent px-2 py-1.5 font-mono outline-none hover:border-slate-300 focus:border-indigo-500 dark:hover:border-slate-600" /></td>
                         <td className="px-3 py-2 font-mono text-slate-600 dark:text-slate-300">{row.formattedPhone || '—'}</td>
                         <td className="px-3 py-2"><span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-bold ${row.state === 'valid' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300' : row.state === 'duplicate' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300' : 'bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300'}`}>{row.state === 'valid' ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}{row.reason}</span></td>
                       </tr>
@@ -317,8 +335,8 @@ export default function ContactImportModal({ open, currentContacts, onClose, onI
         </div>
 
         <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-4 dark:border-slate-800 sm:px-7">
-          <p className="text-xs text-slate-500"><strong className="text-slate-800 dark:text-slate-200">{selectedValidCount}</strong> contato{selectedValidCount === 1 ? '' : 's'} válido{selectedValidCount === 1 ? '' : 's'} selecionado{selectedValidCount === 1 ? '' : 's'}</p>
-          <div className="flex gap-2"><button type="button" onClick={closeModal} className="rounded-xl bg-slate-100 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200">Cancelar</button><button type="button" onClick={confirmImport} disabled={selectedValidCount === 0} className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40">Adicionar {selectedValidCount} à lista</button></div>
+          <p className="text-xs text-slate-500"><strong className="text-slate-800 dark:text-slate-200">{selectedCount}</strong> marcado{selectedCount === 1 ? '' : 's'} para envio{selectedInvalidCount > 0 ? `, incluindo ${selectedInvalidCount} inválido${selectedInvalidCount === 1 ? '' : 's'}` : ''} • {importableRows.length} serão mantidos na lista</p>
+          <div className="flex gap-2"><button type="button" onClick={closeModal} className="rounded-xl bg-slate-100 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200">Cancelar</button><button type="button" onClick={confirmImport} disabled={importableRows.length === 0} className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-indigo-500/20 hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40">Adicionar {importableRows.length} à lista</button></div>
         </footer>
       </div>
     </div>

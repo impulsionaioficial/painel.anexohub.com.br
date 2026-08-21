@@ -31,6 +31,10 @@ export interface ContactItem {
   sentAt?: string;
   /** Quando false, o contato permanece na campanha, mas não entra no disparo. */
   selectedForSending?: boolean;
+  /** Resultado da validação feita durante a importação da planilha. */
+  importValidation?: 'valid' | 'invalid';
+  /** Motivo exibido para uma linha sinalizada como inválida na importação. */
+  importValidationMessage?: string;
   lastInstanceName?: string;
   attemptCount?: number;
   /** Próximo trecho /n ainda não enviado, usado para retomar sem duplicar mensagens anteriores. */

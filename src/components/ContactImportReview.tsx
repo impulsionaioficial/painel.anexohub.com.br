@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import {
   CheckCircle2,
+  AlertTriangle,
   CircleOff,
   RotateCcw,
   Search,
@@ -13,7 +14,7 @@ import {
 } from 'lucide-react';
 import { ContactItem } from '@/lib/types';
 
-type ReviewFilter = 'all' | 'selected' | 'excluded';
+type ReviewFilter = 'all' | 'selected' | 'excluded' | 'invalid';
 
 interface ContactImportReviewProps {
   contacts: ContactItem[];
@@ -56,12 +57,14 @@ export default function ContactImportReview({
 
   const selectedCount = contacts.filter((contact) => contact.selectedForSending !== false).length;
   const excludedCount = contacts.length - selectedCount;
+  const invalidCount = contacts.filter((contact) => contact.importValidation === 'invalid').length;
   const normalizedQuery = normalizeSearch(search);
 
   const visibleContacts = useMemo(() => contacts.filter((contact) => {
     const selected = contact.selectedForSending !== false;
     if (filter === 'selected' && !selected) return false;
     if (filter === 'excluded' && selected) return false;
+    if (filter === 'invalid' && contact.importValidation !== 'invalid') return false;
     if (!normalizedQuery) return true;
 
     const haystack = normalizeSearch(`${contact.name || ''} ${contact.phone}`);
@@ -117,7 +120,7 @@ export default function ContactImportReview({
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
           <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500"><Users className="h-3.5 w-3.5" /> Importados</div>
           <p className="mt-1 text-lg font-black text-slate-900 dark:text-white">{contacts.length}</p>
@@ -129,6 +132,10 @@ export default function ContactImportReview({
         <div className="rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500"><CircleOff className="h-3.5 w-3.5" /> Não enviar</div>
           <p className="mt-1 text-lg font-black text-slate-500">{excludedCount}</p>
+        </div>
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-3 dark:border-rose-500/20 dark:bg-rose-500/10">
+          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-rose-700 dark:text-rose-300"><AlertTriangle className="h-3.5 w-3.5" /> Inválidos</div>
+          <p className="mt-1 text-lg font-black text-rose-700 dark:text-rose-300">{invalidCount}</p>
         </div>
       </div>
 
@@ -154,6 +161,7 @@ export default function ContactImportReview({
             ['all', `Todos (${contacts.length})`],
             ['selected', `Marcados (${selectedCount})`],
             ['excluded', `Desmarcados (${excludedCount})`],
+            ['invalid', `Inválidos (${invalidCount})`],
           ] as [ReviewFilter, string][]).map(([value, label]) => (
             <button
               key={value}
@@ -189,8 +197,9 @@ export default function ContactImportReview({
           </div>
         ) : visibleContacts.map((contact) => {
           const selected = contact.selectedForSending !== false;
+          const importInvalid = contact.importValidation === 'invalid';
           return (
-            <div key={contact.id} className={`flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors ${selected ? 'border-indigo-200 bg-indigo-50/60 dark:border-indigo-500/20 dark:bg-indigo-500/5' : 'border-slate-200 bg-white opacity-60 dark:border-slate-800 dark:bg-slate-900'}`}>
+            <div key={contact.id} className={`flex items-center gap-2.5 rounded-xl border p-2.5 transition-colors ${importInvalid ? selected ? 'border-rose-300 bg-rose-50 dark:border-rose-500/40 dark:bg-rose-500/10' : 'border-rose-200 bg-rose-50/60 opacity-70 dark:border-rose-500/20 dark:bg-rose-500/5' : selected ? 'border-indigo-200 bg-indigo-50/60 dark:border-indigo-500/20 dark:bg-indigo-500/5' : 'border-slate-200 bg-white opacity-60 dark:border-slate-800 dark:bg-slate-900'}`}>
               <input
                 type="checkbox"
                 checked={selected}
@@ -202,6 +211,9 @@ export default function ContactImportReview({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[11px] font-bold text-slate-800 dark:text-slate-200">{contact.name || 'Sem nome'}</p>
                 <p className="truncate font-mono text-[10px] text-slate-500">{contact.phone}</p>
+                {importInvalid && (
+                  <p className="mt-0.5 line-clamp-2 text-[9px] font-bold text-rose-600 dark:text-rose-400">{contact.importValidationMessage || 'Sinalizado como inválido durante a importação'}</p>
+                )}
                 {contact.errorMessage && (
                   <p className="mt-0.5 line-clamp-2 text-[9px] font-medium text-rose-600 dark:text-rose-400">{contact.errorMessage}</p>
                 )}
@@ -209,6 +221,9 @@ export default function ContactImportReview({
                   <p className="mt-0.5 text-[9px] font-bold text-amber-600 dark:text-amber-400">Retomará na mensagem {contact.nextMessagePart + 1}</p>
                 )}
               </div>
+              {importInvalid && (
+                <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[9px] font-bold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">Inválido</span>
+              )}
               <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${contact.status === 'sent' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300' : contact.status === 'error' ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300' : contact.status === 'sending' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
                 {STATUS_LABEL[contact.status]}
               </span>

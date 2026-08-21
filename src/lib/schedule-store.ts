@@ -1,5 +1,7 @@
 import { DetailedReportItem, ScheduledTask } from './types';
 
+const REPORT_HISTORY_LIMIT = 10_000;
+
 // Persistence for Detailed Reports History with automatic deduplication
 export function getStoredReports(): DetailedReportItem[] {
   if (typeof window === 'undefined') return [];
@@ -50,7 +52,7 @@ export function addStoredReportItem(item: DetailedReportItem): void {
     updated[existingIndex] = { ...updated[existingIndex], ...item };
   } else {
     // Prepend new item
-    updated = [item, ...current.slice(0, 999)]; // Limit to 1000 records
+    updated = [item, ...current.slice(0, REPORT_HISTORY_LIMIT - 1)];
   }
 
   sessionStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
@@ -80,14 +82,13 @@ export function addStoredReportItems(items: DetailedReportItem[]): void {
     }
   }
 
-  // Convert back to array (limit to 1000 items)
-  const updated = Array.from(map.values()).slice(0, 1000);
+  const updated = Array.from(map.values()).slice(0, REPORT_HISTORY_LIMIT);
   sessionStorage.setItem('awp_detailed_reports', JSON.stringify(updated));
 }
 
 export function saveStoredReports(reports: DetailedReportItem[]): void {
   if (typeof window === 'undefined') return;
-  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(reports.slice(0, 1000)));
+  sessionStorage.setItem('awp_detailed_reports', JSON.stringify(reports.slice(0, REPORT_HISTORY_LIMIT)));
 }
 
 export function deleteStoredReportItem(id: string): void {

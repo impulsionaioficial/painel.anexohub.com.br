@@ -4,6 +4,7 @@ import { requireSession } from '@/lib/server-auth';
 import { assertSafeEvolutionBaseUrl } from '@/lib/network-safety';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { MAX_MESSAGE_PARTS, splitMessageSequence } from '@/lib/message-sequence';
+import { MAX_CAMPAIGN_CONTACTS } from '@/lib/contact-import';
 
 export async function POST(request: Request) {
   const authError = await requireSession(request, 'can_start_campaign');
@@ -16,8 +17,8 @@ export async function POST(request: Request) {
     if (!Array.isArray(contacts) || contacts.length === 0) {
       return NextResponse.json({ success: false, error: 'Selecione contatos para disparar.' });
     }
-    if (contacts.length > 1_000) {
-      return NextResponse.json({ success: false, error: 'Limite de 1.000 contatos por campanha.' }, { status: 400 });
+    if (contacts.length > MAX_CAMPAIGN_CONTACTS) {
+      return NextResponse.json({ success: false, error: `Limite de ${MAX_CAMPAIGN_CONTACTS.toLocaleString('pt-BR')} contatos por campanha.` }, { status: 400 });
     }
     if (!contacts.some((contact) => contact && contact.selectedForSending !== false && contact.status !== 'sent')) {
       return NextResponse.json({ success: false, error: 'Marque pelo menos um contato pendente para disparar.' }, { status: 400 });
